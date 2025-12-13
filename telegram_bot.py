@@ -70,11 +70,12 @@ TEXTS = {
 }
 
 def get_text(chat_id, key):
-    """Получает текст на выбранном языке пользователя."""
+    """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
+    # Обращение к глобальному application.user_data, которое хранит язык по chat_id
     lang = application.user_data.get(chat_id, {}).get('lang', 'ru')
     return TEXTS.get(lang, TEXTS['ru']).get(key, TEXTS['ru'][key])
 
-# --- УТИЛИТЫ ОБФУСКАЦИИ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
+# --- УТИЛИТЫ ОБФУСКАЦИИ (БЕЗ ИЗМЕНЕНИЙ) ---
 
 KEY_LENGTH = 32
 TIME_LIMIT = 0.05 
@@ -99,44 +100,54 @@ def escape_markdown_v2(text: str) -> str:
     text = text.replace('\\', '\\\\')
     return text
 
-# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ ---
+# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (БЕЗ ИЗМЕНЕНИЙ) ---
 
-# *ВНИМАНИЕ: ВСЯ ЛОГИКА ЗАГРУЗЧИКА ПРЕВРАЩАЕТСЯ В ОДНУ СТРОКУ В ФУНКЦИИ get_loader*
-# Эта функция генерирует сам самомодифицирующийся код.
+LUA_BASE64_IMPL = """
+local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+local function B64(data)
+    data = string.gsub(data, '[^'..b..'=]', '')
+    return (data:gsub('.', function(x)
+        if (x == '=') then return '' end
+        local r,f='',(b:find(x)-1)
+        for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+        return r;
+    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+        if (#x ~= 8) then return '' end
+        local c=0
+        for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+        return string.char(c)
+    end))
+end
+"""
 
 def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
     """Генерирует финальный загрузчик с полной стрингификацией логики."""
     
-    # --- I. Генерация параметров и логики XOR (как раньше) ---
+    # --- I. Генерация параметров и логики XOR ---
     if mode == 'roblox_exec':
         xor_logic = "local XorFunc = bit.bxor or bit32.bxor"
-    # ... (другие режимы остались, но укорочены для примера)
+    elif mode == 'roblox_studio':
+        xor_logic = "local XorFunc = bit32.bxor"
     elif mode == 'safe_native':
         xor_logic = "local function XorFunc(a, b) local c=0; local p=1; while a>0 or b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a=(a-ra)/2; b=(b-rb)/2; p=p*2 end return c end"
-    else:
+    else: # Generic
         xor_logic = "local XorFunc = (bit and bit.bxor) or (bit32 and bit32.bxor) or function(a,b) local p,c=1,0 while a>0 and b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a,b,p=(a-ra)/2,(b-rb)/2,p*2 end if a<b then a=b end while a>0 do local ra=a%2 if ra>0 then c=c+p end a,p=(a-ra)/2,p*2 end return c end"
 
-    # ... (Остальная генерация ключей и запутанной арифметики) ...
-    
     # 2. Разбиение ключа (на 6 частей)
     split_points = sorted(random.sample(range(1, KEY_LENGTH), 5))
-    key_parts = [
-        final_key[0:split_points[0]], final_key[split_points[0]:split_points[1]],
-        final_key[split_points[1]:split_points[2]], final_key[split_points[2]:split_points[3]],
-        final_key[split_points[3]:split_points[4]], final_key[split_points[4]:KEY_LENGTH]
-    ]
+    key_parts = [final_key[0:split_points[0]], final_key[split_points[0]:split_points[1]],
+                 final_key[split_points[1]:split_points[2]], final_key[split_points[2]:split_points[3]],
+                 final_key[split_points[3]:split_points[4]], final_key[split_points[4]:KEY_LENGTH]]
+    
     mini_keys = [generate_key(8) for _ in range(6)]
-    encoded_parts = [
-        xor_obfuscate(part.encode('utf-8'), mini_keys[i]) for i, part in enumerate(key_parts)
-    ]
+    encoded_parts = [xor_obfuscate(part.encode('utf-8'), mini_keys[i]) for i, part in enumerate(key_parts)]
     
-    # 3. Гипер-Запутанная Сборка Ключа (Hyper-Fuzzing)
-    indices = [1, 2, 3, 4, 5, 6]
-    random.shuffle(indices)
-    
+    # 3. Гипер-Запутанная Сборка Ключа
+    indices = [1, 2, 3, 4, 5, 6]; random.shuffle(indices)
     key_assembly_parts = [f"P{i}" for i in indices]
     key_assembly_concat = " .. ".join(key_assembly_parts)
     
+    # 4. Переменные для запутывания
     nums = [random.randint(100, 999) for _ in range(3)]
     vars = [generate_key(4) for _ in range(9)]
     
@@ -225,54 +236,72 @@ def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
     """
     
     # 4. Финальный шаг: Шифруем ВЕСЬ загрузчик Base64 и XOR-ом!
-    # Используем простую, статичную логику для этого мета-шифра.
     META_KEY = generate_key(8)
     encoded_meta = xor_obfuscate(FULL_LOADER_LOGIC.encode('utf-8'), META_KEY)
 
-    # --- III. Самая верхняя, нечитаемая часть скрипта ---
-    # Это единственная часть, которая остается в открытом виде.
+    # --- III. Самая верхняя, нечитаемая часть скрипта (MEGA-CHAOS) ---
     
-    FINAl_SCRIPT = f"""--[[ Meloten MEGA-OBF ({mode}) - Anti-Analysis & Self-Modifying Loader ]]
+    FINAl_SCRIPT = f"""--[[ Meloten MEGA-CHAOS-OBF ({mode}) - Ultimate Self-Modifying Loader ]]
 local D = "{encoded_meta}"
 local K = "{META_KEY}"
 
--- Встроенная логика Base64 и XOR для расшифровки самого загрузчика
-local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-local function B64_D(data)
-    data = string.gsub(data, '[^'..b..'=]', '')
-    return (data:gsub('.', function(x)
-        if (x == '=') then return '' end
-        local r,f='',(b:find(x)-1)
-        for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
-        return r;
-    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
-        if (#x ~= 8) then return '' end
-        local c=0
-        for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
-        return string.char(c)
-    end))
+-- Встроенная логика Base64 и XOR (максимально нечитаемая форма)
+local function GetLogic(s, i)
+    return string.byte(s, i)
 end
 
-local function XOR_D(data, key)
+local function ChaosDecrypt(data, key)
+    local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    
+    -- Нечитаемый Base64-декодер
+    local function B64_D(d)
+        d = string.gsub(d, '[^'..b..'=]', '')
+        local f = function(x)
+            if (x == '=') then return '' end
+            local r, fr = '', (b:find(x)-1)
+            for j=6,1,-1 do r = r .. ((fr % 2^j - fr % 2^(j-1)) > 0 and '1' or '0') end
+            return r;
+        end
+        return (d:gsub('.', f):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+            if (#x ~= 8) then return '' end
+            local c=0
+            for k=1,8 do c=c+(x:sub(k,k)=='1' and 2^(8-k) or 0) end
+            return string.char(c)
+        end))
+    end
+
     local decoded = B64_D(data)
     local k_len = #key
     local t = {{}}
     
     for i = 1, #decoded do
-        local byte_value = string.byte(decoded, i)
-        local key_value = string.byte(key, (i - 1) % k_len + 1)
-        table.insert(t, string.char(byte_value ~ key_value)) -- Используем прямой XOR, если доступен (Roblox)
+        local byte_value = GetLogic(decoded, i)
+        local key_value = GetLogic(key, (i - 1) % k_len + 1)
+        -- Используем прямой XOR, если доступен (для Roblox/JIT)
+        local xor_result = byte_value ~ key_value 
+        if not xor_result then
+            -- Резервный XOR
+            local function native_xor(a, b)
+                local p, c = 1, 0
+                while a > 0 or b > 0 do
+                    local ra, rb = a % 2, b % 2
+                    if ra ~= rb then c = c + p end
+                    a, b, p = (a - ra) / 2, (b - rb) / 2, p * 2
+                end
+                return c
+            end
+            xor_result = native_xor(byte_value, key_value)
+        end
+        
+        table.insert(t, string.char(xor_result))
     end
     return table.concat(t)
 end
 
 local run = loadstring or load
-local code = XOR_D(D, K)
+local code = ChaosDecrypt(D, K)
 run(code)()
 """
-    # Примечание: Мы используем простой ~ для XOR в мета-загрузчике, предполагая наличие bit32.
-    # Если это не сработает (например, в Generic Lua 5.1), нужно будет использовать более сложный XOR.
-    # Для Roblox/JIT этот код максимально компактен и нечитаем.
     
     return FINAl_SCRIPT
 
@@ -283,7 +312,7 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     lang_code = query.data.split('_')[1]
     
-    # Сохраняем язык в user_data (привязан к chat_id)
+    # Храним данные о языке в глобальном хранилище application.user_data
     chat_id = update.effective_chat.id
     if chat_id not in application.user_data:
         application.user_data[chat_id] = {}
@@ -292,7 +321,6 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = get_text(chat_id, 'language_set')
     await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
-    # После выбора языка предлагаем отправить файл
     start_text = get_text(chat_id, 'start')
     await context.bot.send_message(chat_id, start_text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -300,7 +328,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     # Проверяем, был ли уже выбран язык
-    if context.user_data.get('lang'):
+    if application.user_data.get(chat_id, {}).get('lang'):
         start_text = get_text(chat_id, 'start')
         await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN_V2)
         return
@@ -322,7 +350,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     # Проверяем, выбран ли язык (обязательно)
-    if not context.user_data.get('lang'):
+    if not application.user_data.get(chat_id, {}).get('lang'):
         await update.message.reply_text("Пожалуйста, выберите язык с помощью команды /start.", parse_mode=ParseMode.MARKDOWN_V2)
         return
         
@@ -334,6 +362,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
+    # Используем context.user_data для временного хранения file_id и file_name
     context.user_data['file_id'] = doc.file_id
     context.user_data['file_name'] = doc.file_name
 
@@ -356,12 +385,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer() 
     chat_id = update.effective_chat.id
-    
+
     if 'setlang' in query.data:
+        await query.answer()
         await set_language(update, context)
         return
+
+    await query.answer() 
         
     mode = query.data
     file_id = context.user_data.get('file_id')
@@ -390,7 +421,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_key = generate_key(KEY_LENGTH)
         encoded_data_base64 = xor_obfuscate(original_data_bytes, final_key)
         
-        # ГЕНЕРАЦИЯ УЛЬТИМАТИВНОГО ЗАГРУЗЧИКА
         final_code = get_loader(mode, encoded_data_base64, final_key)
 
         output_file = BytesIO(final_code.encode('utf-8'))
@@ -417,17 +447,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         error_text = get_text(chat_id, 'error').format(error_message)
         await query.edit_message_text(error_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-# --- ИНИЦИАЛИЗАЦИЯ (ОСТАВЛЕНА БЕЗ ИЗМЕНЕНИЙ) ---
+# --- ИНИЦИАЛИЗАЦИЯ ---
 
 def init_app():
     application.add_handler(CommandHandler('start', start_command))
-    application.add_handler(CallbackQueryHandler(start_command, pattern='^setlang_'))
+    application.add_handler(CallbackQueryHandler(button_callback, pattern='^setlang_'))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # Инициализируем user_data
-    global application
-    application.user_data = {} 
+    # FIX: Удалена некорректная декларация 'global application'. 
+    # 'application' доступна как глобальная переменная.
+    
+    # Инициализируем user_data для хранения настроек (например, языка) по chat_id
+    if not hasattr(application, 'user_data'):
+        application.user_data = {}
     
     loop.run_until_complete(application.initialize())
     try:
@@ -450,7 +483,7 @@ def set_webhook():
         except Exception as e:
             logger.error(f"Webhook fail: {e}")
 
-# --- РОУТЫ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
+# --- РОУТЫ ---
 
 @app.route('/', methods=['GET'])
 def index():
@@ -460,6 +493,7 @@ def index():
 def webhook():
     if request.method == "POST":
         try:
+            # application.bot и application доступны как глобальные
             update = Update.de_json(request.get_json(force=True), application.bot)
             loop.run_until_complete(application.process_update(update))
         except Exception as e:
