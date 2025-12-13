@@ -8,8 +8,8 @@ from io import BytesIO
 import asyncio
 from flask import Flask, request
 
-# Импорты Telegram
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+# --- ИСПРАВЛЕНО: InputFile теперь импортируется из 'telegram' ---
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile 
 from telegram.ext import (
     Application, 
     MessageHandler, 
@@ -19,7 +19,7 @@ from telegram.ext import (
     filters,
     ApplicationBuilder
 )
-from telegram.constants import ParseMode, InputFile
+from telegram.constants import ParseMode 
 
 # --- КОНФИГУРАЦИЯ ---
 
@@ -104,13 +104,13 @@ def get_loader(mode: str, encoded_data: str, key: str) -> str:
         xor_logic = "local bxor = bit32.bxor"
     elif mode == 'generic':
         # LuaJIT, 5.1, 5.3 (стандартный 'bit' или 'bit32')
+        # Если нет 'bit' или 'bit32', переходит на медленный нативный XOR
         xor_logic = "local bxor = (bit and bit.bxor) or (bit32 and bit32.bxor) or function(a,b) local p,c=1,0 while a>0 and b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a,b,p=(a-ra)/2,(b-rb)/2,p*2 end if a<b then a=b end while a>0 do local ra=a%2 if ra>0 then c=c+p end a,p=(a-ra)/2,p*2 end return c end"
     elif mode == 'safe_native':
-        # Чистая Lua-логика, которая гарантированно работает везде, где нет bit32/bit.
-        # Медленно, но безотказно. 
+        # Чистая Lua-логика, гарантированно работающая везде.
         xor_logic = "local function bxor(a, b) local c=0; local p=1; while a>0 or b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a=(a-ra)/2; b=(b-rb)/2; p=p*2 end return c end"
     else:
-        # По умолчанию - Generic
+        # Fallback
         return get_loader('generic', encoded_data, key)
 
     return f"""--[[ Obfuscated by Meloten ({mode}) ]]
@@ -144,7 +144,7 @@ run(res)()
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 **Meloten Obfuscator**\n\n"
-        "Отправь мне `.lua` файл\\.",
+        "Отправь мне \\.lua файл\\.",
         parse_mode=ParseMode.MARKDOWN_V2
     )
 
@@ -152,14 +152,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Принимает файл и сохраняет его ID, спрашивает платформу."""
     doc = update.message.document
     if not doc or not doc.file_name.lower().endswith('.lua'):
-        await update.message.reply_text("⛔ Только файлы `.lua`!", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text("⛔ Только файлы \\.lua\\!", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     # Сохраняем file_id и file_name в context.user_data 
     context.user_data['file_id'] = doc.file_id
     context.user_data['file_name'] = doc.file_name
 
-    # Создаем клавиатуру с новым режимом
+    # Создаем клавиатуру
     keyboard = [
         [InlineKeyboardButton("🎮 Roblox (Executors)", callback_data='roblox_exec')],
         [InlineKeyboardButton("🛠 Roblox Studio (bit32)", callback_data='roblox_studio')],
@@ -168,7 +168,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Экранируем имя файла для сообщения
     escaped_file_name = escape_markdown_v2(doc.file_name)
 
     await update.message.reply_text(
@@ -194,28 +193,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         escaped_file_name = escape_markdown_v2(file_name)
         await query.edit_message_text(f"⏳ Шифрую файл: `{escaped_file_name}` для **{mode}**\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
 
-        # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ЧТЕНИЕ ФАЙЛА ---
+        # Чтение файла
         f = await context.bot.get_file(file_id)
         bio = BytesIO()
         await f.download_to_memory(bio)
         
-        # Читаем все байты из объекта BytesIO
-        # Декодируем в UTF-8, чтобы получить чистую строку Lua-кода с 1 строки
-        # Errors='ignore' позволяет избежать падения из-за BOM или не-UTF8 символов
         original_data_bytes = bio.getvalue()
         
-        # Если файл пуст
         if not original_data_bytes:
             raise ValueError("Файл пуст или не содержит данных.")
             
-        # Шифруем
+        # Шифрование
         obf_key = generate_key(KEY_LENGTH)
-        
-        # Мы шифруем байты, не декодированную строку, чтобы избежать проблем с кодировкой в Lua
         encoded_data_base64 = xor_obfuscate(original_data_bytes, obf_key)
         final_code = get_loader(mode, encoded_data_base64, obf_key)
 
-        # Отправляем
+        # Отправка
         output_file = BytesIO(final_code.encode('utf-8'))
         output_file.name = f"{mode}_{file_name}"
 
@@ -228,7 +221,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN_V2
         )
         
-        # Удаляем данные, чтобы не хранить их в памяти
         context.user_data.pop('file_id', None)
         context.user_data.pop('file_name', None)
 
