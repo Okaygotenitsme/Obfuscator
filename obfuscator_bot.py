@@ -1,7 +1,7 @@
 import os
 import telegram
 from telegram.ext import Updater, MessageHandler, Filters
-from flask import Flask, request # Импорт Flask для Webhook
+from flask import Flask, request
 import logging
 import random
 import string
@@ -16,12 +16,10 @@ def xor_obfuscate(data, key):
     key_bytes = key.encode('utf-8')
     key_len = len(key_bytes)
     
-    # Преобразование входящих данных в байты
     data_bytes = data if isinstance(data, bytes) else data.encode('utf-8')
 
     obfuscated_bytes = bytearray(data_bytes)
     for i in range(len(obfuscated_bytes)):
-        # Применяем XOR с циклическим использованием ключа
         obfuscated_bytes[i] ^= key_bytes[i % key_len]
         
     encoded_data = base64.b64encode(obfuscated_bytes)
@@ -32,9 +30,7 @@ def generate_lua_loader(encoded_data, key):
     Генерирует Lua-код-загрузчик, который расшифровывает и выполняет 
     зашифрованные данные во время выполнения (runtime).
     """
-    # Внимание: В этом коде предполагается, что Lua-среда имеет доступ к 
-    # функциям Base64-декодирования (base64.decode) и битовым операциям (bit.bxor).
-    # Это часто верно для LuaJIT, Roblox или FiveM.
+    # Предполагается, что Lua-среда имеет доступ к Base64 и bit.bxor.
 
     lua_loader = f"""
 -- Дешифровщик Lua XOR (Автоматически сгенерирован ботом)
@@ -42,8 +38,8 @@ def generate_lua_loader(encoded_data, key):
 local encoded_data = "{encoded_data}"
 local key = "{key}"
 
--- Используем base64.decode (Предполагается, что функция доступна в среде)
 local function base64_decode(data)
+    -- Используем base64.decode (Предполагается, что функция доступна в среде)
     return base64.decode(data) 
 end
 
@@ -78,16 +74,16 @@ def generate_key(length):
 # --- ОСНОВНОЙ КОД БОТА И WEBHOOK ---
 
 # Инициализация и получение токена из переменных окружения Render
-TOKEN = os.environ.get('7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU')
+# ИСПРАВЛЕНИЕ: Мы ищем переменную окружения по имени 'TELEGRAM_BOT_TOKEN'
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
-    # Render увидит эту ошибку, если токен не установлен, и остановит развертывание.
     raise ValueError("TELEGRAM_BOT_TOKEN не установлен в переменных окружения Render.")
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Инициализация Flask и Updater (для работы с Webhook)
+# Инициализация Flask и Updater
 app = Flask(__name__)
 updater = Updater(TOKEN, use_context=True)
 dispatcher = updater.dispatcher
@@ -149,7 +145,6 @@ def webhook():
 
 def set_webhook_url():
     """Устанавливает URL Webhook, используя адрес Render."""
-    # Render автоматически предоставляет этот URL
     RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
     if RENDER_EXTERNAL_HOSTNAME:
         # Полный URL, куда Telegram должен отправлять обновления
@@ -165,6 +160,4 @@ def set_webhook_url():
         logger.warning("RENDER_EXTERNAL_HOSTNAME не найден. Пропуск установки Webhook.")
 
 # Вызываем функцию установки Webhook при запуске сервиса Gunicorn
-# Примечание: Gunicorn запустит 'app', а затем эта функция выполнится в контексте процесса.
-set_webhook_url() 
-
+set_webhook_url()
