@@ -3,8 +3,9 @@ import logging
 import random
 import string
 import base64
-import requests # Новый импорт для безопасной установки WEBHOOK
+import requests 
 from io import BytesIO
+import asyncio # Добавлен импорт для потенциальной асинхронной работы
 
 # Импорты для Telegram Bot API (Async V20+)
 from telegram import Update, Bot 
@@ -46,14 +47,23 @@ def generate_lua_loader(encoded_data: str, key: str) -> str:
     Генерирует Lua-код-загрузчик, который расшифровывает и выполняет 
     зашифрованные данные во время выполнения (runtime).
     """
+    # ⚠️ ВНИМАНИЕ: Для корректной работы этого загрузчика в Lua-среде 
+    # (например, Roblox, FiveM и т.д.) необходима поддержка функций:
+    # 1. base64.decode
+    # 2. bit.bxor (или совместимый XOR оператор/функция)
     lua_loader = f"""
 -- Дешифровщик Lua XOR (Автоматически сгенерирован ботом Meloten)
--- Requires: base64.decode, bit.bxor (или совместимые функции)
+-- Requires: base64.decode, bit.bxor
 local encoded_data = "{encoded_data}"
 local key = "{key}"
 
 local function base64_decode(data)
     -- Предполагается, что base64.decode доступна в среде Lua.
+    -- В большинстве сред ее нужно реализовать или подключить библиотеку.
+    -- Пример:
+    -- local b64 = require('base64')
+    -- return b64.decode(data)
+    -- Мы оставляем заглушку:
     return base64.decode(data) 
 end
 
@@ -67,6 +77,7 @@ for i = 1, #decoded_bytes do
     local key_value = string.byte(key_bytes, (i - 1) % key_len + 1)
     
     -- Применяем XOR (bit.bxor)
+    -- ВНИМАНИЕ: Некоторые среды могут требовать bit32.bxor или другой реализации
     local obfuscated_byte = bit.bxor(byte_value, key_value)
     
     -- Сохраняем расшифрованный байт
@@ -76,23 +87,19 @@ end
 local chunk = table.concat(chunk_bytes)
 
 -- Выполняем расшифрованный код (использует loadstring)
+-- ВНИМАНИЕ: loadstring (или load) может быть отключен в некоторых средах.
 loadstring(chunk)()
 """
     return lua_loader
 
 # --- КОНФИГУРАЦИЯ И WEBHOOK ---
 
-# ⚠️ ВАШ РЕАЛЬНЫЙ ТОКЕН ДЛЯ НАДЕЖНОСТИ
-# Используется как резервный, если переменная окружения не найдена
 FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
 
-# 1. Попытка получить токен из переменной окружения (предпочтительный, безопасный метод)
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
-# 2. Если переменная окружения не найдена, используем резервный токен
 if not TOKEN:
     if FALLBACK_TOKEN == 'ВАШ_РЕАЛЬНЫЙ_ТОКЕН_ЗДЕСЬ':
-        # Если и переменная окружения отсутствует, и вы не вставили токен
         raise ValueError("ТОКЕН не найден. Пожалуйста, установите TELEGRAM_BOT_TOKEN в Render или вставьте токен в FALLBACK_TOKEN.")
     
     TOKEN = FALLBACK_TOKEN
@@ -162,26 +169,33 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # --- НАСТРОЙКА И ЗАПУСК WEBHOOK (ИСПРАВЛЕНА) ---
 
 def setup_application():
-    """Добавляет обработчики к объекту Application."""
+    """Добавляет обработчики к объекту Application и запускает его в потоке."""
     
     application.add_handler(CommandHandler('start', start_command))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_error_handler(error_handler)
     
-    logger.info("Обработчики Application настроены.")
+    # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Запуск Application в отдельном потоке
+    # Это позволяет PTB асинхронно обрабатывать обновления, пока Flask/Gunicorn 
+    # синхронно принимает запросы.
+    application.run_in_thread() 
+    
+    logger.info("Обработчики Application настроены и запущены в потоке.")
 
 def set_webhook_url():
-    """Устанавливает URL Webhook, используя синхронный запрос, чтобы избежать конфликтов asyncio."""
+    """Устанавливает URL Webhook, используя синхронный запрос."""
     RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
     
     if RENDER_EXTERNAL_HOSTNAME:
-        # Формируем URL Webhook и URL для Telegram API
+        # Формируем URL Webhook 
         webhook_url = f'https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}'
         telegram_api_url = f'https://api.telegram.org/bot{TOKEN}/setWebhook'
         
         try:
             # Используем requests для синхронной установки Webhook
-            response = requests.get(telegram_api_url, params={'url': webhook_url})
+            # Добавление drop_pending_updates=True помогает очистить старые, необработанные обновления
+            response = requests.get(telegram_api_url, 
+                                    params={'url': webhook_url, 'drop_pending_updates': 'True'})
             
             if response.status_code == 200 and response.json().get('ok'):
                 logger.info(f"Webhook успешно установлен на: {webhook_url}")
@@ -200,18 +214,27 @@ def hello():
     """Проверка доступности сервиса Render."""
     return "Obfuscator Bot is running.", 200
 
+# КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Обработчик Webhook теперь синхронный
 @app.route(f'/{TOKEN}', methods=['POST'])
-async def webhook_handler():
+def webhook_handler():
     """Обрабатывает входящие обновления от Telegram и передает их Application."""
     if request.method == "POST":
-        # Передаем обновление в очередь Application для асинхронной обработки
-        await application.update_queue.put(
-            Update.de_json(request.get_json(force=True), application.bot)
-        )
-    return 'ok'
+        try:
+            # Преобразование JSON в объект Update
+            update = Update.de_json(request.get_json(force=True), application.bot)
+            
+            # ИСПОЛЬЗУЕМ process_update для передачи обновления в асинхронную очередь PTB
+            application.process_update(update)
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке Webhook: {e}")
+            # Всегда возвращаем 200 OK, чтобы Telegram не переотправлял обновление
+            return 'Error processing update', 200 
 
-# Инициализация Application
+    return 'ok', 200 # Успешный ответ для Telegram
+
+# Инициализация Application и установка Webhook ПРИ ЗАПУСКЕ GUNICORN
+# Эти функции должны быть вызваны сразу при импорте модуля
+# (то есть при запуске Gunicorn), чтобы инициализировать среду.
 setup_application()
-
-# Установка Webhook при запуске сервиса Gunicorn/Render
 set_webhook_url()
