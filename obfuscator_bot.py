@@ -1,6 +1,8 @@
 import os
 import telegram
-from telegram.ext import Updater, MessageHandler, Filters
+# ИСПРАВЛЕНИЕ 1: Добавлен CommandHandler для обработки /start
+from telegram.ext import Updater, MessageHandler, CommandHandler 
+from telegram.ext import filters
 from flask import Flask, request
 import logging
 import random
@@ -73,21 +75,28 @@ def generate_key(length):
 
 # --- ОСНОВНОЙ КОД БОТА И WEBHOOK ---
 
-# Инициализация и получение токена из переменных окружения Render
-# ИСПРАВЛЕНИЕ: Мы ищем переменную окружения по имени 'TELEGRAM_BOT_TOKEN'
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не установлен в переменных окружения Render.")
 
-# Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Инициализация Flask и Updater
 app = Flask(__name__)
 updater = Updater(TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 bot = updater.bot 
+
+# ИСПРАВЛЕНИЕ 2: Новая функция для обработки команды /start
+def start(update, context):
+    """Отправляет приветственное сообщение и инструкцию."""
+    instructions = (
+        "👋 Привет! Я — **Meloten**, бот для шифрования Lua-кодов.\n\n"
+        "Чтобы начать обфускацию, просто *отправь мне файл* со своим скриптом. "
+        "Главное условие: **расширение файла должно быть .lua**.\n\n"
+        "Я верну тебе зашифрованный код, который загрузит и выполнит оригинал во время выполнения."
+    )
+    update.message.reply_text(instructions, parse_mode=telegram.ParseMode.MARKDOWN)
 
 def handle_file(update, context):
     """Обрабатывает загруженный файл."""
@@ -126,7 +135,10 @@ def handle_file(update, context):
         logger.error(f"Ошибка при обработке файла: {e}")
         update.message.reply_text("Произошла ошибка при обфускации файла.")
 
-dispatcher.add_handler(MessageHandler(Filters.document, handle_file))
+# ИСПРАВЛЕНИЕ 3: Регистрация нового обработчика для команды /start
+dispatcher.add_handler(CommandHandler('start', start))
+# Регистрация обработчика для документов
+dispatcher.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
 # --- ОБРАБОТЧИКИ WEBHOOK (ДЛЯ RENDER) ---
 
