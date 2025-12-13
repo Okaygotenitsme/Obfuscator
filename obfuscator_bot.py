@@ -84,10 +84,10 @@ loadstring(chunk)()
 
 # ⚠️ ВАШ РЕАЛЬНЫЙ ТОКЕН ДЛЯ НАДЕЖНОСТИ
 # Используется как резервный, если переменная окружения не найдена
-FALLBACK_TOKEN = 'ВАШ_РЕАЛЬНЫЙ_ТОКЕН_ЗДЕСЬ' 
+FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
 
 # 1. Попытка получить токен из переменной окружения (предпочтительный, безопасный метод)
-TOKEN = os.environ.get('7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU')
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
 # 2. Если переменная окружения не найдена, используем резервный токен
 if not TOKEN:
