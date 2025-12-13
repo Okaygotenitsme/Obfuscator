@@ -8,7 +8,7 @@ from io import BytesIO
 import asyncio
 from flask import Flask, request
 
-# --- ИСПРАВЛЕНО: InputFile импортируется из 'telegram' ---
+# --- ИСПРАВЛЕННЫЕ ИМПОРТЫ ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile 
 from telegram.ext import (
     Application, 
@@ -26,11 +26,9 @@ from telegram.constants import ParseMode
 FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', FALLBACK_TOKEN)
 
-# Логирование
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Flask и Loop
 app = Flask(__name__)
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -65,12 +63,9 @@ def xor_obfuscate(data: bytes, key: str) -> str:
 
 def escape_markdown_v2(text: str) -> str:
     """Экранирует специальные символы MarkdownV2 для подписей."""
-    # Обратный слеш должен быть первым, чтобы не экранировать уже добавленные слеши
     specials = r'\_*[]()~`>#+-=|{}.!'
-    # Экранируем все специальные символы
     for char in specials:
         text = text.replace(char, f'\\{char}')
-    # Дополнительное экранирование обратного слеша
     text = text.replace('\\', '\\\\')
     return text
 
@@ -78,7 +73,7 @@ def escape_markdown_v2(text: str) -> str:
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-local function base64_decode(data)
+local function B64(data)
     data = string.gsub(data, '[^'..b..'=]', '')
     return (data:gsub('.', function(x)
         if (x == '=') then return '' end
@@ -94,63 +89,126 @@ local function base64_decode(data)
 end
 """
 
-def get_loader(mode: str, encoded_data: str, key: str) -> str:
-    """Генерирует загрузчик в зависимости от выбранной платформы."""
+def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
+    """Генерирует загрузчик с многослойным скрытием ключа."""
     
+    # 1. Выбор логики XOR
     if mode == 'roblox_exec':
-        xor_logic = "local bxor = bit.bxor or bit32.bxor"
+        xor_logic = "local XorFunc = bit.bxor or bit32.bxor"
     elif mode == 'roblox_studio':
-        xor_logic = "local bxor = bit32.bxor"
+        xor_logic = "local XorFunc = bit32.bxor"
     elif mode == 'generic':
-        xor_logic = "local bxor = (bit and bit.bxor) or (bit32 and bit32.bxor) or function(a,b) local p,c=1,0 while a>0 and b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a,b,p=(a-ra)/2,(b-rb)/2,p*2 end if a<b then a=b end while a>0 do local ra=a%2 if ra>0 then c=c+p end a,p=(a-ra)/2,p*2 end return c end"
+        xor_logic = "local XorFunc = (bit and bit.bxor) or (bit32 and bit32.bxor) or function(a,b) local p,c=1,0 while a>0 and b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a,b,p=(a-ra)/2,(b-rb)/2,p*2 end if a<b then a=b end while a>0 do local ra=a%2 if ra>0 then c=c+p end a,p=(a-ra)/2,p*2 end return c end"
     elif mode == 'safe_native':
-        xor_logic = "local function bxor(a, b) local c=0; local p=1; while a>0 or b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a=(a-ra)/2; b=(b-rb)/2; p=p*2 end return c end"
+        xor_logic = "local function XorFunc(a, b) local c=0; local p=1; while a>0 or b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a=(a-ra)/2; b=(b-rb)/2; p=p*2 end return c end"
     else:
-        return get_loader('generic', encoded_data, key)
+        return get_loader('generic', encoded_data, final_key)
 
-    return f"""--[[ Obfuscated by Meloten ({mode}) ]]
-local encoded = "{encoded_data}"
-local key = "{key}"
+    # 2. Разбиение ключа и генерация обфускации первого слоя
+    # Разбиваем ключ на 4 части (для усложнения ручной сборки)
+    split_points = sorted(random.sample(range(1, KEY_LENGTH), 3))
+    
+    key_parts = [
+        final_key[0:split_points[0]],
+        final_key[split_points[0]:split_points[1]],
+        final_key[split_points[1]:split_points[2]],
+        final_key[split_points[2]:KEY_LENGTH]
+    ]
+    
+    # Генерируем "мини-ключи" для первого слоя шифрования
+    mini_keys = [generate_key(8) for _ in range(4)]
+    
+    # Шифруем части FinalKey этими мини-ключами
+    encoded_parts = [
+        xor_obfuscate(part.encode('utf-8'), mini_keys[i]) for i, part in enumerate(key_parts)
+    ]
+    
+    # 3. Запутанная сборка ключа (меняем порядок, используем арифметику)
+    # Используем случайные индексы для сборки
+    indices = [1, 2, 3, 4]
+    random.shuffle(indices)
+    
+    # Генерируем запутанную формулу для сборки ключа
+    # Например: PartB .. PartD .. PartA .. PartC
+    key_assembly = ""
+    for i in range(4):
+        key_assembly += f"P{indices[i]} .. "
+    key_assembly = key_assembly[:-4] # Удаляем лишние .. 
+    
+    # Генерируем запутанные имена переменных
+    vars = [generate_key(4) for _ in range(7)]
+    
+    # 4. Сборка финального загрузчика
+    
+    return f"""--[[ Meloten MAX-OBF ({mode}) - Triple Layer Encrypted Loader ]]
+local encoded_main = "{encoded_data}"
+local {vars[0]} = "{encoded_parts[0]}"
+local {vars[1]} = "{encoded_parts[1]}"
+local {vars[2]} = "{encoded_parts[2]}"
+local {vars[3]} = "{encoded_parts[3]}"
+
+local K1 = "{mini_keys[0]}"
+local K2 = "{mini_keys[1]}"
+local K3 = "{mini_keys[2]}"
+local K4 = "{mini_keys[3]}"
 
 {LUA_BASE64_IMPL}
-
 {xor_logic}
 
-local decoded = base64_decode(encoded)
-local k_len = #key
-local t = {{}}
-
-for i = 1, #decoded do
-    local byte_value = string.byte(decoded, i)
-    local key_value = string.byte(key, (i - 1) % k_len + 1)
+local function Decrypt(data, key)
+    local decoded = B64(data)
+    local k_len = #key
+    local t = {{}}
     
-    local obfuscated_byte = bxor(byte_value, key_value)
-    
-    table.insert(t, string.char(obfuscated_byte))
+    for i = 1, #decoded do
+        local byte_value = string.byte(decoded, i)
+        local key_value = string.byte(key, (i - 1) % k_len + 1)
+        local obfuscated_byte = XorFunc(byte_value, key_value)
+        table.insert(t, string.char(obfuscated_byte))
+    end
+    return table.concat(t)
 end
 
-local res = table.concat(t)
+-- Скрытая функция для сборки частей
+local function GetKey()
+    -- 1. Первичная дешифровка скрытых частей ключа
+    local P1 = Decrypt({vars[0]}, K1)
+    local P2 = Decrypt({vars[1]}, K2)
+    local P3 = Decrypt({vars[2]}, K3)
+    local P4 = Decrypt({vars[3]}, K4)
+
+    -- 2. Запутанная арифметика для создания финального ключа
+    -- Здесь мы используем случайные индексы:
+    local FinalKey = {key_assembly}
+
+    return FinalKey
+end
+
+local FinalKey = GetKey()
+
+-- 3. Финальная дешифровка основного кода
+local res = Decrypt(encoded_main, FinalKey)
+
+-- 4. Запуск
 local run = loadstring or load
 run(res)()
 """
 
-# --- ХЕНДЛЕРЫ ---
+# --- ХЕНДЛЕРЫ И ФУНКЦИИ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 **Meloten Obfuscator**\n\n"
-        "Отправь мне файл \\.lua или \\.txt\\.", # <--- ИЗМЕНЕНИЕ
+        "Отправь мне файл \\.lua или \\.txt\\.",
         parse_mode=ParseMode.MARKDOWN_V2
     )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принимает файл и сохраняет его ID, спрашивает платформу."""
     doc = update.message.document
     filename = doc.file_name.lower()
     
-    # --- ИЗМЕНЕНИЕ: Принимаем .lua и .txt ---
     if not doc or not (filename.endswith('.lua') or filename.endswith('.txt')):
-        await update.message.reply_text("⛔ Только файлы \\.lua и \\.txt\\!", parse_mode=ParseMode.MARKDOWN_V2) # <--- ИЗМЕНЕНИЕ
+        await update.message.reply_text("⛔ Только файлы \\.lua и \\.txt\\!", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     context.user_data['file_id'] = doc.file_id
@@ -173,7 +231,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает нажатие кнопки."""
     query = update.callback_query
     await query.answer() 
 
@@ -188,7 +245,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         escaped_file_name = escape_markdown_v2(file_name)
         
-        # --- ИЗМЕНЕНИЕ: Используем код-блок для mode, чтобы избежать ошибки с курсивом ---
         await query.edit_message_text(
             f"⏳ Шифрую файл: `{escaped_file_name}` для платформы `{mode}`\\.\\.\\.", 
             parse_mode=ParseMode.MARKDOWN_V2
@@ -203,14 +259,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not original_data_bytes:
             raise ValueError("Файл пуст или не содержит данных.")
             
-        obf_key = generate_key(KEY_LENGTH)
-        encoded_data_base64 = xor_obfuscate(original_data_bytes, obf_key)
-        final_code = get_loader(mode, encoded_data_base64, obf_key)
+        # Генерируем ключ для финального шифрования
+        final_key = generate_key(KEY_LENGTH)
+        
+        encoded_data_base64 = xor_obfuscate(original_data_bytes, final_key)
+        
+        # Генерируем загрузчик с многослойным скрытием ключа
+        final_code = get_loader(mode, encoded_data_base64, final_key)
 
         output_file = BytesIO(final_code.encode('utf-8'))
-        output_file.name = f"{mode}_{file_name}.lua" # Добавляем .lua к имени, если это был .txt
+        output_file.name = f"{mode}_{file_name}.lua"
 
-        escaped_key = escape_markdown_v2(obf_key)
+        escaped_key = escape_markdown_v2(final_key)
         
         await context.bot.send_document(
             chat_id=query.message.chat_id,
