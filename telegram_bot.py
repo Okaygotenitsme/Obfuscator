@@ -71,11 +71,10 @@ TEXTS = {
 
 def get_text(chat_id, key):
     """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
-    # Обращение к глобальному application.user_data, которое хранит язык по chat_id
     lang = application.user_data.get(chat_id, {}).get('lang', 'ru')
     return TEXTS.get(lang, TEXTS['ru']).get(key, TEXTS['ru'][key])
 
-# --- УТИЛИТЫ ОБФУСКАЦИИ (БЕЗ ИЗМЕНЕНИЙ) ---
+# --- УТИЛИТЫ ОБФУСКАЦИИ ---
 
 KEY_LENGTH = 32
 TIME_LIMIT = 0.05 
@@ -100,7 +99,7 @@ def escape_markdown_v2(text: str) -> str:
     text = text.replace('\\', '\\\\')
     return text
 
-# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (БЕЗ ИЗМЕНЕНИЙ) ---
+# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ В ЛОГИКЕ) ---
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -310,17 +309,20 @@ run(code)()
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    lang_code = query.data.split('_')[1]
     
-    # Храним данные о языке в глобальном хранилище application.user_data
+    lang_code = query.data.split('_')[1]
     chat_id = update.effective_chat.id
+    
+    # Сохраняем язык
     if chat_id not in application.user_data:
         application.user_data[chat_id] = {}
     application.user_data[chat_id]['lang'] = lang_code
     
+    # Отправляем сообщение об успешной установке языка
     text = get_text(chat_id, 'language_set')
     await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
+    # После выбора языка предлагаем отправить файл
     start_text = get_text(chat_id, 'start')
     await context.bot.send_message(chat_id, start_text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -349,7 +351,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    # Проверяем, выбран ли язык (обязательно)
+    # Проверяем, выбран ли язык
     if not application.user_data.get(chat_id, {}).get('lang'):
         await update.message.reply_text("Пожалуйста, выберите язык с помощью команды /start.", parse_mode=ParseMode.MARKDOWN_V2)
         return
@@ -362,7 +364,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
-    # Используем context.user_data для временного хранения file_id и file_name
+    # Используем context.user_data для временного хранения
     context.user_data['file_id'] = doc.file_id
     context.user_data['file_name'] = doc.file_name
 
@@ -387,11 +389,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = update.effective_chat.id
 
-    if 'setlang' in query.data:
-        await query.answer()
-        await set_language(update, context)
-        return
-
+    # ВНИМАНИЕ: set_language теперь вызывается отдельным обработчиком в init_app, 
+    # поэтому здесь мы обрабатываем ТОЛЬКО кнопки обфускации
+    
     await query.answer() 
         
     mode = query.data
@@ -450,15 +450,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- ИНИЦИАЛИЗАЦИЯ ---
 
 def init_app():
+    # 1. Обработчик команды /start
     application.add_handler(CommandHandler('start', start_command))
-    application.add_handler(CallbackQueryHandler(button_callback, pattern='^setlang_'))
+    
+    # 2. Обработчик выбора языка (только для setlang_*)
+    application.add_handler(CallbackQueryHandler(set_language, pattern='^setlang_')) 
+    
+    # 3. Обработчик загрузки документов
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    # 4. Обработчик кнопок обфускации (остальные кнопки)
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # FIX: Удалена некорректная декларация 'global application'. 
-    # 'application' доступна как глобальная переменная.
-    
-    # Инициализируем user_data для хранения настроек (например, языка) по chat_id
+    # Инициализируем user_data
     if not hasattr(application, 'user_data'):
         application.user_data = {}
     
@@ -493,7 +497,6 @@ def index():
 def webhook():
     if request.method == "POST":
         try:
-            # application.bot и application доступны как глобальные
             update = Update.de_json(request.get_json(force=True), application.bot)
             loop.run_until_complete(application.process_update(update))
         except Exception as e:
