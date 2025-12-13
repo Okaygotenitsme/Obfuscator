@@ -10,7 +10,7 @@ import time
 from flask import Flask, request
 
 # --- ИСПРАВЛЕННЫЕ ИМПОРТЫ ---
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile 
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
 from telegram.ext import (
     Application, 
     MessageHandler, 
@@ -71,10 +71,11 @@ TEXTS = {
 
 def get_text(chat_id, key):
     """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
+    # Используем application.user_data для сохранения языка между запросами
     lang = application.user_data.get(chat_id, {}).get('lang', 'ru')
     return TEXTS.get(lang, TEXTS['ru']).get(key, TEXTS['ru'][key])
 
-# --- УТИЛИТЫ ОБФУСКАЦИИ ---
+# --- УТИЛИТЫ ОБФУСКАЦИИ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
 
 KEY_LENGTH = 32
 TIME_LIMIT = 0.05 
@@ -313,14 +314,19 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang_code = query.data.split('_')[1]
     chat_id = update.effective_chat.id
     
-    # Сохраняем язык
+    # Сохраняем язык в application.user_data (общее хранилище)
     if chat_id not in application.user_data:
         application.user_data[chat_id] = {}
     application.user_data[chat_id]['lang'] = lang_code
     
-    # Отправляем сообщение об успешной установке языка
+    # --- УСТОЙЧИВОЕ К СБОЯМ РЕДАКТИРОВАНИЕ СООБЩЕНИЯ ---
     text = get_text(chat_id, 'language_set')
-    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    try:
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    except Exception as e:
+        # Если не удалось отредактировать (например, сообщение слишком старое), отправляем новое
+        logger.warning(f"Failed to edit language message: {e}")
+        await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2)
 
     # После выбора языка предлагаем отправить файл
     start_text = get_text(chat_id, 'start')
@@ -364,7 +370,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
-    # Используем context.user_data для временного хранения
+    # Используем context.user_data для временного хранения файла
     context.user_data['file_id'] = doc.file_id
     context.user_data['file_name'] = doc.file_name
 
@@ -389,12 +395,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = update.effective_chat.id
 
-    # ВНИМАНИЕ: set_language теперь вызывается отдельным обработчиком в init_app, 
-    # поэтому здесь мы обрабатываем ТОЛЬКО кнопки обфускации
+    # Обрабатываем только кнопки обфускации
     
     await query.answer() 
         
     mode = query.data
+    # Получаем file_id и file_name из контекста (он должен быть там после handle_document)
     file_id = context.user_data.get('file_id')
     file_name = context.user_data.get('file_name')
     
@@ -407,6 +413,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         escaped_file_name = escape_markdown_v2(file_name)
         text = get_text(chat_id, 'encrypting').format(escaped_file_name, mode)
         
+        # Редактируем сообщение, чтобы показать прогресс
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
         f = await context.bot.get_file(file_id)
@@ -437,6 +444,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN_V2
         )
         
+        # Очищаем временные данные
         context.user_data.pop('file_id', None)
         context.user_data.pop('file_name', None)
 
@@ -445,21 +453,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error processing callback: {e}")
         error_message = escape_markdown_v2(str(e))
         error_text = get_text(chat_id, 'error').format(error_message)
-        await query.edit_message_text(error_text, parse_mode=ParseMode.MARKDOWN_V2)
+        
+        # Резервный механизм: если редактирование не удалось, отправляем новое сообщение
+        try:
+            await query.edit_message_text(error_text, parse_mode=ParseMode.MARKDOWN_V2)
+        except:
+             await context.bot.send_message(chat_id, error_text, parse_mode=ParseMode.MARKDOWN_V2)
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
 
 def init_app():
-    # 1. Обработчик команды /start
     application.add_handler(CommandHandler('start', start_command))
-    
-    # 2. Обработчик выбора языка (только для setlang_*)
+    # Обработчик выбора языка
     application.add_handler(CallbackQueryHandler(set_language, pattern='^setlang_')) 
-    
-    # 3. Обработчик загрузки документов
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    
-    # 4. Обработчик кнопок обфускации (остальные кнопки)
+    # Обработчик кнопок обфускации
     application.add_handler(CallbackQueryHandler(button_callback))
     
     # Инициализируем user_data
