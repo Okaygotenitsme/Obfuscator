@@ -1,7 +1,7 @@
 import os
 import telegram
-from telegram.ext import Updater, MessageHandler, CommandHandler 
-from telegram.ext import filters
+# ОТКАТ: Используем старый импорт для совместимости с V13 (включаем Filters)
+from telegram.ext import Updater, MessageHandler, CommandHandler, Filters 
 from flask import Flask, request
 import logging
 import random
@@ -82,8 +82,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-# ВАЖНО: Ни 'use_context=True', ни 'update_queue' здесь нет
-updater = Updater(TOKEN) 
+# ОТКАТ: Возвращаем use_context=True, чтобы избежать ошибки update_queue
+updater = Updater(TOKEN, use_context=True) 
 dispatcher = updater.dispatcher
 bot = updater.bot 
 
@@ -135,7 +135,8 @@ def handle_file(update, context):
         update.message.reply_text("Произошла ошибка при обфускации файла.")
 
 dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+# ОТКАТ: Используем старый синтаксис Filters.document
+dispatcher.add_handler(MessageHandler(Filters.document, handle_file)) 
 
 # --- ОБРАБОТЧИКИ WEBHOOK (ДЛЯ RENDER) ---
 
