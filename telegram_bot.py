@@ -5,10 +5,10 @@ import string
 import base64
 import requests 
 from io import BytesIO
-import asyncio # Добавлен импорт для потенциальной асинхронной работы
+import asyncio
 
 # Импорты для Telegram Bot API (Async V20+)
-from telegram import Update, Bot 
+from telegram import Update
 from telegram.ext import (
     Application, 
     MessageHandler, 
@@ -16,7 +16,6 @@ from telegram.ext import (
     ContextTypes, 
     filters
 )
-# ИСПРАВЛЕНО: ParseMode теперь импортируется из telegram.constants
 from telegram.constants import ParseMode 
 from flask import Flask, request
 
@@ -36,34 +35,20 @@ def xor_obfuscate(data: bytes, key: str) -> str:
     
     obfuscated_bytes = bytearray(data)
     for i in range(len(obfuscated_bytes)):
-        # Применяем XOR к каждому байту
         obfuscated_bytes[i] ^= key_bytes[i % key_len]
         
     encoded_data = base64.b64encode(obfuscated_bytes)
     return encoded_data.decode('utf-8')
 
 def generate_lua_loader(encoded_data: str, key: str) -> str:
-    """
-    Генерирует Lua-код-загрузчик, который расшифровывает и выполняет 
-    зашифрованные данные во время выполнения (runtime).
-    """
-    # ⚠️ ВНИМАНИЕ: Для корректной работы этого загрузчика в Lua-среде 
-    # (например, Roblox, FiveM и т.д.) необходима поддержка функций:
-    # 1. base64.decode
-    # 2. bit.bxor (или совместимый XOR оператор/функция)
+    """Генерирует Lua-код-загрузчик."""
     lua_loader = f"""
--- Дешифровщик Lua XOR (Автоматически сгенерирован ботом Meloten)
--- Requires: base64.decode, bit.bxor
+-- Дешифровщик Lua XOR (Meloten Bot)
 local encoded_data = "{encoded_data}"
 local key = "{key}"
 
 local function base64_decode(data)
-    -- Предполагается, что base64.decode доступна в среде Lua.
-    -- В большинстве сред ее нужно реализовать или подключить библиотеку.
-    -- Пример:
-    -- local b64 = require('base64')
-    -- return b64.decode(data)
-    -- Мы оставляем заглушку:
+    -- Requires external base64 lib or implementation
     return base64.decode(data) 
 end
 
@@ -75,67 +60,46 @@ local chunk_bytes = {{}}
 for i = 1, #decoded_bytes do
     local byte_value = string.byte(decoded_bytes, i)
     local key_value = string.byte(key_bytes, (i - 1) % key_len + 1)
-    
-    -- Применяем XOR (bit.bxor)
-    -- ВНИМАНИЕ: Некоторые среды могут требовать bit32.bxor или другой реализации
     local obfuscated_byte = bit.bxor(byte_value, key_value)
-    
-    -- Сохраняем расшифрованный байт
     table.insert(chunk_bytes, string.char(obfuscated_byte))
 end
 
 local chunk = table.concat(chunk_bytes)
-
--- Выполняем расшифрованный код (использует loadstring)
--- ВНИМАНИЕ: loadstring (или load) может быть отключен в некоторых средах.
 loadstring(chunk)()
 """
     return lua_loader
 
-# --- КОНФИГУРАЦИЯ И WEBHOOK ---
+# --- КОНФИГУРАЦИЯ ---
 
 FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', FALLBACK_TOKEN)
 
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-
-if not TOKEN:
-    if FALLBACK_TOKEN == 'ВАШ_РЕАЛЬНЫЙ_ТОКЕН_ЗДЕСЬ':
-        raise ValueError("ТОКЕН не найден. Пожалуйста, установите TELEGRAM_BOT_TOKEN в Render или вставьте токен в FALLBACK_TOKEN.")
-    
-    TOKEN = FALLBACK_TOKEN
-    logging.warning("Токен получен из FALLBACK_TOKEN. Рекомендуется использовать переменные окружения.")
-
-# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Объект Flask
 app = Flask(__name__)
 
-# Глобальный объект Application
+# Глобальные объекты
 application = Application.builder().token(TOKEN).build()
+loop = asyncio.new_event_loop() # Создаем свой цикл событий
+asyncio.set_event_loop(loop) # Устанавливаем его как текущий
 
-# --- АСИНХРОННЫЕ ФУНКЦИИ-ОБРАБОТЧИКИ ---
+# --- ОБРАБОТЧИКИ БОТА ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет приветственное сообщение и инструкцию."""
     instructions = (
-        "👋 Привет! Я — **Meloten**, бот для шифрования Lua-кодов.\n\n"
-        "Чтобы начать обфускацию, просто *отправь мне файл* со своим скриптом. "
-        "Главное условие: **расширение файла должно быть .lua**.\n\n"
-        "Я верну тебе зашифрованный код, который загрузит и выполнит оригинал во время выполнения."
+        "👋 Привет! Я — **Meloten**.\n"
+        "Отправь мне **.lua** файл, и я его зашифрую."
     )
     await update.message.reply_text(instructions, parse_mode=ParseMode.MARKDOWN)
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает загруженный файл, обфусцирует его и отправляет загрузчик."""
     document = update.message.document
-    
     if not document or not document.file_name.lower().endswith('.lua'):
-        await update.message.reply_text("Пожалуйста, отправьте файл с расширением **.lua**.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("Нужен файл с расширением **.lua**.", parse_mode=ParseMode.MARKDOWN)
         return
 
     try:
@@ -147,7 +111,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         obf_key = generate_key(KEY_LENGTH)
         encoded_data_base64 = xor_obfuscate(original_data, obf_key)
-        
         final_obfuscated_code = generate_lua_loader(encoded_data_base64, obf_key)
         
         output_filename = "obf_" + document.file_name
@@ -155,86 +118,66 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         output_file.name = output_filename
         
         await update.message.reply_document(output_file, 
-                                     caption=f"Ваш код обфусцирован с ключом: `{obf_key}`",
+                                     caption=f"Ключ: `{obf_key}`",
                                      parse_mode=ParseMode.MARKDOWN)
-        
     except Exception as e:
-        logger.error(f"Ошибка при обработке файла: {e}")
-        await update.message.reply_text(f"Произошла ошибка при обфускации файла: {e}")
+        logger.error(f"Error: {e}")
+        await update.message.reply_text(f"Ошибка: {e}")
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Логирование ошибок."""
-    logger.error("Произошла ошибка в обработчике:", exc_info=context.error)
+# --- НАСТРОЙКА ---
 
-# --- НАСТРОЙКА И ЗАПУСК WEBHOOK (ИСПРАВЛЕНА) ---
-
-def setup_application():
-    """Добавляет обработчики к объекту Application и запускает его в потоке."""
-    
+def setup_bot():
+    """Добавляет хендлеры и инициализирует приложение."""
     application.add_handler(CommandHandler('start', start_command))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    application.add_error_handler(error_handler)
     
-    # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Запуск Application в отдельном потоке
-    # Это позволяет PTB асинхронно обрабатывать обновления, пока Flask/Gunicorn 
-    # синхронно принимает запросы.
-    application.run_in_thread() 
-    
-    logger.info("Обработчики Application настроены и запущены в потоке.")
+    # Инициализируем PTB внутри нашего цикла событий
+    # Application.initialize() и start() - асинхронные
+    loop.run_until_complete(application.initialize())
+    loop.run_until_complete(application.start())
+    logger.info("Bot application initialized.")
 
 def set_webhook_url():
-    """Устанавливает URL Webhook, используя синхронный запрос."""
+    """Устанавливает Webhook."""
     RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
-    
     if RENDER_EXTERNAL_HOSTNAME:
-        # Формируем URL Webhook 
         webhook_url = f'https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}'
         telegram_api_url = f'https://api.telegram.org/bot{TOKEN}/setWebhook'
-        
         try:
-            # Используем requests для синхронной установки Webhook
-            # Добавление drop_pending_updates=True помогает очистить старые, необработанные обновления
-            response = requests.get(telegram_api_url, 
-                                    params={'url': webhook_url, 'drop_pending_updates': 'True'})
-            
-            if response.status_code == 200 and response.json().get('ok'):
-                logger.info(f"Webhook успешно установлен на: {webhook_url}")
+            response = requests.get(telegram_api_url, params={'url': webhook_url, 'drop_pending_updates': 'True'})
+            if response.status_code == 200:
+                logger.info(f"Webhook set: {webhook_url}")
             else:
-                logger.error(f"Не удалось установить Webhook. Ответ: {response.text}")
+                logger.error(f"Webhook failed: {response.text}")
         except Exception as e:
-            logger.error(f"Ошибка при попытке установки Webhook: {e}")
-    else:
-        logger.warning("RENDER_EXTERNAL_HOSTNAME не найден. Пропуск установки Webhook.")
+            logger.error(f"Webhook error: {e}")
 
-
-# --- ОБРАБОТЧИКИ FLASK ---
+# --- FLASK ROUTING ---
 
 @app.route('/', methods=['GET'])
-def hello():
-    """Проверка доступности сервиса Render."""
-    return "Obfuscator Bot is running.", 200
+def index():
+    return "Bot is running.", 200
 
-# КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Обработчик Webhook теперь синхронный
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook_handler():
-    """Обрабатывает входящие обновления от Telegram и передает их Application."""
+    """Синхронный Flask обработчик, вызывающий асинхронный код бота."""
     if request.method == "POST":
         try:
-            # Преобразование JSON в объект Update
-            update = Update.de_json(request.get_json(force=True), application.bot)
+            # Получаем JSON
+            json_update = request.get_json(force=True)
+            # Создаем объект Update
+            update = Update.de_json(json_update, application.bot)
             
-            # ИСПОЛЬЗУЕМ process_update для передачи обновления в асинхронную очередь PTB
-            application.process_update(update)
+            # ВАЖНО: Запускаем process_update внутри нашего loop
+            # Это блокирует поток Flask до завершения обработки, 
+            # но для простых ботов это ок.
+            loop.run_until_complete(application.process_update(update))
             
         except Exception as e:
-            logger.error(f"Ошибка при обработке Webhook: {e}")
-            # Всегда возвращаем 200 OK, чтобы Telegram не переотправлял обновление
-            return 'Error processing update', 200 
+            logger.error(f"Update error: {e}")
+            return 'error', 200
+    return 'ok', 200
 
-    return 'ok', 200 # Успешный ответ для Telegram
-
-# Инициализация Application и установка Webhook ПРИ ЗАПУСКЕ GUNICORN
-# Эти функции должны быть вызваны сразу при импорте модуля
-# (то есть при запуске Gunicorn), чтобы инициализировать среду.
-setup_application()
+# Запуск настройки при старте
+setup_bot()
 set_webhook_url()
