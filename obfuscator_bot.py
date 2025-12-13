@@ -81,10 +81,21 @@ loadstring(chunk)()
 
 # --- КОНФИГУРАЦИЯ И WEBHOOK ---
 
-# Используем переменные окружения для развертывания
+# ⚠️ ВАШ РЕАЛЬНЫЙ ТОКЕН ДЛЯ НАДЕЖНОСТИ
+# Используется как резервный, если переменная окружения не найдена
+FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
+
+# 1. Попытка получить токен из переменной окружения (предпочтительный, безопасный метод)
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+
+# 2. Если переменная окружения не найдена, используем резервный токен
 if not TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN не установлен в переменных окружения.")
+    if FALLBACK_TOKEN == 'ВАШ_РЕАЛЬНЫЙ_ТОКЕН_ЗДЕСЬ':
+        # Если и переменная окружения отсутствует, и вы не вставили токен
+        raise ValueError("ТОКЕН не найден. Пожалуйста, установите TELEGRAM_BOT_TOKEN в Render или вставьте токен в FALLBACK_TOKEN.")
+    
+    TOKEN = FALLBACK_TOKEN
+    logging.warning("Токен получен из FALLBACK_TOKEN. Рекомендуется использовать переменные окружения.")
 
 # Настройка логирования
 logging.basicConfig(
@@ -100,6 +111,7 @@ app = Flask(__name__)
 application = Application.builder().token(TOKEN).build()
 
 # --- АСИНХРОННЫЕ ФУНКЦИИ-ОБРАБОТЧИКИ ---
+# ... (Остальной код без изменений)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет приветственное сообщение и инструкцию."""
