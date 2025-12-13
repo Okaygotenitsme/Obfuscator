@@ -83,7 +83,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-updater = Updater(TOKEN, use_context=True)
+updater = Updater(TOKEN)
 dispatcher = updater.dispatcher
 bot = updater.bot 
 
