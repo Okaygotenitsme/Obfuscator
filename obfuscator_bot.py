@@ -3,6 +3,7 @@ import logging
 import random
 import string
 import base64
+import requests # Новый импорт для безопасной установки WEBHOOK
 from io import BytesIO
 
 # Импорты для Telegram Bot API (Async V20+)
@@ -14,7 +15,7 @@ from telegram.ext import (
     ContextTypes, 
     filters
 )
-# ИСПРАВЛЕНИЕ: ParseMode перемещен в constants в V20+
+# ИСПРАВЛЕНО: ParseMode теперь импортируется из telegram.constants
 from telegram.constants import ParseMode 
 from flask import Flask, request
 
@@ -83,10 +84,10 @@ loadstring(chunk)()
 
 # ⚠️ ВАШ РЕАЛЬНЫЙ ТОКЕН ДЛЯ НАДЕЖНОСТИ
 # Используется как резервный, если переменная окружения не найдена
-FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
+FALLBACK_TOKEN = 'ВАШ_РЕАЛЬНЫЙ_ТОКЕН_ЗДЕСЬ' 
 
 # 1. Попытка получить токен из переменной окружения (предпочтительный, безопасный метод)
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TOKEN = os.environ.get('7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU')
 
 # 2. Если переменная окружения не найдена, используем резервный токен
 if not TOKEN:
@@ -111,7 +112,6 @@ app = Flask(__name__)
 application = Application.builder().token(TOKEN).build()
 
 # --- АСИНХРОННЫЕ ФУНКЦИИ-ОБРАБОТЧИКИ ---
-# ... (Остальной код без изменений)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет приветственное сообщение и инструкцию."""
@@ -132,26 +132,21 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     try:
-        # 1. Скачивание файла асинхронно
         file_info = await context.bot.get_file(document.file_id)
         file_data = BytesIO()
         await file_info.download_to_memory(file_data)
         file_data.seek(0)
         original_data = file_data.read()
         
-        # 2. Генерация ключа и обфускация
         obf_key = generate_key(KEY_LENGTH)
         encoded_data_base64 = xor_obfuscate(original_data, obf_key)
         
-        # 3. Генерация загрузчика
         final_obfuscated_code = generate_lua_loader(encoded_data_base64, obf_key)
         
-        # 4. Подготовка файла к отправке
         output_filename = "obf_" + document.file_name
         output_file = BytesIO(final_obfuscated_code.encode('utf-8'))
         output_file.name = output_filename
         
-        # 5. Отправка обфусцированного файла
         await update.message.reply_document(output_file, 
                                      caption=f"Ваш код обфусцирован с ключом: `{obf_key}`",
                                      parse_mode=ParseMode.MARKDOWN)
@@ -164,37 +159,36 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Логирование ошибок."""
     logger.error("Произошла ошибка в обработчике:", exc_info=context.error)
 
-# --- НАСТРОЙКА И ЗАПУСК WEBHOOK ---
+# --- НАСТРОЙКА И ЗАПУСК WEBHOOK (ИСПРАВЛЕНА) ---
 
 def setup_application():
     """Добавляет обработчики к объекту Application."""
     
-    # Регистрация обработчиков
     application.add_handler(CommandHandler('start', start_command))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    
-    # Обработчик ошибок
     application.add_error_handler(error_handler)
     
     logger.info("Обработчики Application настроены.")
 
 def set_webhook_url():
-    """Устанавливает URL Webhook, используя адрес Render."""
+    """Устанавливает URL Webhook, используя синхронный запрос, чтобы избежать конфликтов asyncio."""
     RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
     
     if RENDER_EXTERNAL_HOSTNAME:
+        # Формируем URL Webhook и URL для Telegram API
         webhook_url = f'https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}'
+        telegram_api_url = f'https://api.telegram.org/bot{TOKEN}/setWebhook'
         
-        bot_instance = Bot(TOKEN)
-        
-        import asyncio
-        loop = asyncio.get_event_loop()
-        success = loop.run_until_complete(bot_instance.set_webhook(url=webhook_url))
-
-        if success:
-            logger.info(f"Webhook успешно установлен на: {webhook_url}")
-        else:
-            logger.error("Не удалось установить Webhook. Проверьте токен или логи.")
+        try:
+            # Используем requests для синхронной установки Webhook
+            response = requests.get(telegram_api_url, params={'url': webhook_url})
+            
+            if response.status_code == 200 and response.json().get('ok'):
+                logger.info(f"Webhook успешно установлен на: {webhook_url}")
+            else:
+                logger.error(f"Не удалось установить Webhook. Ответ: {response.text}")
+        except Exception as e:
+            logger.error(f"Ошибка при попытке установки Webhook: {e}")
     else:
         logger.warning("RENDER_EXTERNAL_HOSTNAME не найден. Пропуск установки Webhook.")
 
