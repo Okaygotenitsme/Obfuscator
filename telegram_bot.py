@@ -8,7 +8,7 @@ from io import BytesIO
 import asyncio
 from flask import Flask, request
 
-# --- ИСПРАВЛЕНО: InputFile теперь импортируется из 'telegram' ---
+# --- ИСПРАВЛЕНО: InputFile импортируется из 'telegram' ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile 
 from telegram.ext import (
     Application, 
@@ -65,15 +65,17 @@ def xor_obfuscate(data: bytes, key: str) -> str:
 
 def escape_markdown_v2(text: str) -> str:
     """Экранирует специальные символы MarkdownV2 для подписей."""
-    specials = r'_*[]()~`>#+-=|{}.!'
+    # Обратный слеш должен быть первым, чтобы не экранировать уже добавленные слеши
+    specials = r'\_*[]()~`>#+-=|{}.!'
+    # Экранируем все специальные символы
     for char in specials:
         text = text.replace(char, f'\\{char}')
+    # Дополнительное экранирование обратного слеша
     text = text.replace('\\', '\\\\')
     return text
 
 # --- ШАБЛОНЫ ЗАГРУЗЧИКОВ ---
 
-# Чистый Lua Base64 (Для автономности)
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 local function base64_decode(data)
@@ -95,22 +97,15 @@ end
 def get_loader(mode: str, encoded_data: str, key: str) -> str:
     """Генерирует загрузчик в зависимости от выбранной платформы."""
     
-    # Выбор логики XOR в Lua
     if mode == 'roblox_exec':
-        # Executors, часто поддерживают стандартный bit или bit32
         xor_logic = "local bxor = bit.bxor or bit32.bxor"
     elif mode == 'roblox_studio':
-        # Studio, использует bit32
         xor_logic = "local bxor = bit32.bxor"
     elif mode == 'generic':
-        # LuaJIT, 5.1, 5.3 (стандартный 'bit' или 'bit32')
-        # Если нет 'bit' или 'bit32', переходит на медленный нативный XOR
         xor_logic = "local bxor = (bit and bit.bxor) or (bit32 and bit32.bxor) or function(a,b) local p,c=1,0 while a>0 and b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a,b,p=(a-ra)/2,(b-rb)/2,p*2 end if a<b then a=b end while a>0 do local ra=a%2 if ra>0 then c=c+p end a,p=(a-ra)/2,p*2 end return c end"
     elif mode == 'safe_native':
-        # Чистая Lua-логика, гарантированно работающая везде.
         xor_logic = "local function bxor(a, b) local c=0; local p=1; while a>0 or b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a=(a-ra)/2; b=(b-rb)/2; p=p*2 end return c end"
     else:
-        # Fallback
         return get_loader('generic', encoded_data, key)
 
     return f"""--[[ Obfuscated by Meloten ({mode}) ]]
@@ -144,22 +139,23 @@ run(res)()
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 **Meloten Obfuscator**\n\n"
-        "Отправь мне \\.lua файл\\.",
+        "Отправь мне файл \\.lua или \\.txt\\.", # <--- ИЗМЕНЕНИЕ
         parse_mode=ParseMode.MARKDOWN_V2
     )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Принимает файл и сохраняет его ID, спрашивает платформу."""
     doc = update.message.document
-    if not doc or not doc.file_name.lower().endswith('.lua'):
-        await update.message.reply_text("⛔ Только файлы \\.lua\\!", parse_mode=ParseMode.MARKDOWN_V2)
+    filename = doc.file_name.lower()
+    
+    # --- ИЗМЕНЕНИЕ: Принимаем .lua и .txt ---
+    if not doc or not (filename.endswith('.lua') or filename.endswith('.txt')):
+        await update.message.reply_text("⛔ Только файлы \\.lua и \\.txt\\!", parse_mode=ParseMode.MARKDOWN_V2) # <--- ИЗМЕНЕНИЕ
         return
 
-    # Сохраняем file_id и file_name в context.user_data 
     context.user_data['file_id'] = doc.file_id
     context.user_data['file_name'] = doc.file_name
 
-    # Создаем клавиатуру
     keyboard = [
         [InlineKeyboardButton("🎮 Roblox (Executors)", callback_data='roblox_exec')],
         [InlineKeyboardButton("🛠 Roblox Studio (bit32)", callback_data='roblox_studio')],
@@ -191,9 +187,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         escaped_file_name = escape_markdown_v2(file_name)
-        await query.edit_message_text(f"⏳ Шифрую файл: `{escaped_file_name}` для **{mode}**\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        
+        # --- ИЗМЕНЕНИЕ: Используем код-блок для mode, чтобы избежать ошибки с курсивом ---
+        await query.edit_message_text(
+            f"⏳ Шифрую файл: `{escaped_file_name}` для платформы `{mode}`\\.\\.\\.", 
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
 
-        # Чтение файла
         f = await context.bot.get_file(file_id)
         bio = BytesIO()
         await f.download_to_memory(bio)
@@ -203,14 +203,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not original_data_bytes:
             raise ValueError("Файл пуст или не содержит данных.")
             
-        # Шифрование
         obf_key = generate_key(KEY_LENGTH)
         encoded_data_base64 = xor_obfuscate(original_data_bytes, obf_key)
         final_code = get_loader(mode, encoded_data_base64, obf_key)
 
-        # Отправка
         output_file = BytesIO(final_code.encode('utf-8'))
-        output_file.name = f"{mode}_{file_name}"
+        output_file.name = f"{mode}_{file_name}.lua" # Добавляем .lua к имени, если это был .txt
 
         escaped_key = escape_markdown_v2(obf_key)
         
