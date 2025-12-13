@@ -78,7 +78,7 @@ def generate_key(length):
 # --- ОСНОВНОЙ КОД БОТА И WEBHOOK ---
 
 # Инициализация и получение токена из переменных окружения Render
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TOKEN = os.environ.get('7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU')
 if not TOKEN:
     # Render увидит эту ошибку, если токен не установлен, и остановит развертывание.
     raise ValueError("TELEGRAM_BOT_TOKEN не установлен в переменных окружения Render.")
