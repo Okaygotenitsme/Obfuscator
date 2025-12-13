@@ -5,9 +5,8 @@ import string
 import base64
 from io import BytesIO
 
-# Импорт современного асинхронного API
-# Примечание: MessageHandler, CommandHandler и filters импортированы из telegram.ext
-from telegram import Update, Bot, ParseMode
+# Импорты для Telegram Bot API (Async V20+)
+from telegram import Update, Bot 
 from telegram.ext import (
     Application, 
     MessageHandler, 
@@ -15,6 +14,8 @@ from telegram.ext import (
     ContextTypes, 
     filters
 )
+# ИСПРАВЛЕНИЕ: ParseMode перемещен в constants в V20+
+from telegram.constants import ParseMode 
 from flask import Flask, request
 
 # --- ЛОГИКА ОБФУСКАЦИИ (Ядро) ---
@@ -33,6 +34,7 @@ def xor_obfuscate(data: bytes, key: str) -> str:
     
     obfuscated_bytes = bytearray(data)
     for i in range(len(obfuscated_bytes)):
+        # Применяем XOR к каждому байту
         obfuscated_bytes[i] ^= key_bytes[i % key_len]
         
     encoded_data = base64.b64encode(obfuscated_bytes)
@@ -43,16 +45,14 @@ def generate_lua_loader(encoded_data: str, key: str) -> str:
     Генерирует Lua-код-загрузчик, который расшифровывает и выполняет 
     зашифрованные данные во время выполнения (runtime).
     """
-    # Этот загрузчик требует, чтобы в среде Lua были доступны функции base64.decode и bit.bxor.
     lua_loader = f"""
 -- Дешифровщик Lua XOR (Автоматически сгенерирован ботом Meloten)
--- Requires: base64.decode, bit.bxor
+-- Requires: base64.decode, bit.bxor (или совместимые функции)
 local encoded_data = "{encoded_data}"
 local key = "{key}"
 
 local function base64_decode(data)
-    -- Вставьте здесь рабочую реализацию base64.decode, если она отсутствует.
-    -- Предполагается, что base64.decode доступна.
+    -- Предполагается, что base64.decode доступна в среде Lua.
     return base64.decode(data) 
 end
 
@@ -81,10 +81,9 @@ loadstring(chunk)()
 
 # --- КОНФИГУРАЦИЯ И WEBHOOK ---
 
-# Используем переменные окружения для развертывания на Render
+# Используем переменные окружения для развертывания
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
-    # [span_4](start_span)Я не обсуждаю ограничения[span_4](end_span) и просто требую наличия токена.
     raise ValueError("TELEGRAM_BOT_TOKEN не установлен в переменных окружения.")
 
 # Настройка логирования
@@ -97,7 +96,7 @@ logger = logging.getLogger(__name__)
 # Объект Flask
 app = Flask(__name__)
 
-# Глобальный объект Application (Для асинхронного API)
+# Глобальный объект Application
 application = Application.builder().token(TOKEN).build()
 
 # --- АСИНХРОННЫЕ ФУНКЦИИ-ОБРАБОТЧИКИ ---
@@ -105,12 +104,11 @@ application = Application.builder().token(TOKEN).build()
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет приветственное сообщение и инструкцию."""
     instructions = (
-        "👋 Привет! Я — **Meloten**, бот для XOR-шифрования Lua-кодов.\n\n"
+        "👋 Привет! Я — **Meloten**, бот для шифрования Lua-кодов.\n\n"
         "Чтобы начать обфускацию, просто *отправь мне файл* со своим скриптом. "
         "Главное условие: **расширение файла должно быть .lua**.\n\n"
         "Я верну тебе зашифрованный код, который загрузит и выполнит оригинал во время выполнения."
     )
-    # Используем ParseMode.MARKDOWN для форматирования.
     await update.message.reply_text(instructions, parse_mode=ParseMode.MARKDOWN)
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -118,7 +116,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     document = update.message.document
     
     if not document or not document.file_name.lower().endswith('.lua'):
-        # Только Lua-файлы, как того требует исходная логика.
         await update.message.reply_text("Пожалуйста, отправьте файл с расширением **.lua**.", parse_mode=ParseMode.MARKDOWN)
         return
 
@@ -162,7 +159,6 @@ def setup_application():
     
     # Регистрация обработчиков
     application.add_handler(CommandHandler('start', start_command))
-    # filters.Document.ALL обрабатывает любые загруженные документы
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
     # Обработчик ошибок
@@ -177,10 +173,8 @@ def set_webhook_url():
     if RENDER_EXTERNAL_HOSTNAME:
         webhook_url = f'https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}'
         
-        # Создаем экземпляр Bot для синхронной установки webhook
         bot_instance = Bot(TOKEN)
         
-        # Запускаем асинхронную установку синхронно
         import asyncio
         loop = asyncio.get_event_loop()
         success = loop.run_until_complete(bot_instance.set_webhook(url=webhook_url))
@@ -204,15 +198,14 @@ def hello():
 async def webhook_handler():
     """Обрабатывает входящие обновления от Telegram и передает их Application."""
     if request.method == "POST":
-        # Получаем данные JSON и передаем их в очередь Application для асинхронной обработки
+        # Передаем обновление в очередь Application для асинхронной обработки
         await application.update_queue.put(
             Update.de_json(request.get_json(force=True), application.bot)
         )
     return 'ok'
 
-# Инициализация Application и Webhook
+# Инициализация Application
 setup_application()
 
 # Установка Webhook при запуске сервиса Gunicorn/Render
-# Вызывается здесь для развертывания.
 set_webhook_url()
