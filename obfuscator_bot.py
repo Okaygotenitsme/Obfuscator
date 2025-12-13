@@ -1,6 +1,5 @@
 import os
 import telegram
-# ИСПРАВЛЕНИЕ 1: Добавлен CommandHandler для обработки /start
 from telegram.ext import Updater, MessageHandler, CommandHandler 
 from telegram.ext import filters
 from flask import Flask, request
@@ -83,11 +82,11 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-updater = Updater(TOKEN)
+# ВАЖНО: Ни 'use_context=True', ни 'update_queue' здесь нет
+updater = Updater(TOKEN) 
 dispatcher = updater.dispatcher
 bot = updater.bot 
 
-# ИСПРАВЛЕНИЕ 2: Новая функция для обработки команды /start
 def start(update, context):
     """Отправляет приветственное сообщение и инструкцию."""
     instructions = (
@@ -135,9 +134,7 @@ def handle_file(update, context):
         logger.error(f"Ошибка при обработке файла: {e}")
         update.message.reply_text("Произошла ошибка при обфускации файла.")
 
-# ИСПРАВЛЕНИЕ 3: Регистрация нового обработчика для команды /start
 dispatcher.add_handler(CommandHandler('start', start))
-# Регистрация обработчика для документов
 dispatcher.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
 # --- ОБРАБОТЧИКИ WEBHOOK (ДЛЯ RENDER) ---
