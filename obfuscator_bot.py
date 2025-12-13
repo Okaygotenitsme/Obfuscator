@@ -1,7 +1,5 @@
 import os
-import telegram
-# ОТКАТ: Используем старый импорт для совместимости с V13 (включаем Filters)
-from telegram.ext import Updater, MessageHandler, CommandHandler, Filters 
+import telebot # Новая библиотека!
 from flask import Flask, request
 import logging
 import random
@@ -31,8 +29,6 @@ def generate_lua_loader(encoded_data, key):
     Генерирует Lua-код-загрузчик, который расшифровывает и выполняет 
     зашифрованные данные во время выполнения (runtime).
     """
-    # Предполагается, что Lua-среда имеет доступ к Base64 и bit.bxor.
-
     lua_loader = f"""
 -- Дешифровщик Lua XOR (Автоматически сгенерирован ботом)
 -- Требует функций Base64-декодирования и bit-операций (bit.bxor)
@@ -72,22 +68,23 @@ def generate_key(length):
     characters = string.ascii_letters + string.digits + "!@#$%^&*"
     return ''.join(random.choice(characters) for i in range(length))
 
-# --- ОСНОВНОЙ КОД БОТА И WEBHOOK ---
+# --- ОСНОВНОЙ КОД БОТА И WEBHOOK (С ИСПОЛЬЗОВАНИЕМ TELEBOT) ---
 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не установлен в переменных окружения Render.")
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-# ОТКАТ: Возвращаем use_context=True, чтобы избежать ошибки update_queue
-updater = Updater(TOKEN, use_context=True) 
-dispatcher = updater.dispatcher
-bot = updater.bot 
+# Инициализация бота с новой библиотекой
+bot = telebot.TeleBot(TOKEN, threaded=False) 
 
-def start(update, context):
+# --- ОБРАБОТЧИКИ КОМАНД И СООБЩЕНИЙ ---
+
+@bot.message_handler(commands=['start'])
+def start_message(message):
     """Отправляет приветственное сообщение и инструкцию."""
     instructions = (
         "👋 Привет! Я — **Meloten**, бот для шифрования Lua-кодов.\n\n"
@@ -95,24 +92,21 @@ def start(update, context):
         "Главное условие: **расширение файла должно быть .lua**.\n\n"
         "Я верну тебе зашифрованный код, который загрузит и выполнит оригинал во время выполнения."
     )
-    update.message.reply_text(instructions, parse_mode=telegram.ParseMode.MARKDOWN)
+    bot.send_message(message.chat.id, instructions, parse_mode='Markdown')
 
-def handle_file(update, context):
+@bot.message_handler(content_types=['document'])
+def handle_file(message):
     """Обрабатывает загруженный файл."""
-    document = update.message.document
-    
-    if not document:
-        update.message.reply_text("Пожалуйста, отправьте файл для обфускации.")
+    if not message.document.file_name.endswith('.lua'):
+        bot.send_message(message.chat.id, "Пожалуйста, отправьте файл с расширением **.lua**.", parse_mode='Markdown')
         return
 
-    # Скачивание файла
-    file_info = context.bot.get_file(document.file_id)
-    file_data = BytesIO()
-    file_info.download(out=file_data)
-    file_data.seek(0)
-    
     try:
-        original_data = file_data.read()
+        # Скачивание файла
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        original_data = downloaded_file
         obf_key = generate_key(KEY_LENGTH)
         
         # 1. Обфускация
@@ -121,22 +115,20 @@ def handle_file(update, context):
         final_obfuscated_code = generate_lua_loader(encoded_data_base64, obf_key)
         
         # Подготовка файла к отправке
-        output_filename = "obf_" + document.file_name
+        output_filename = "obf_" + message.document.file_name
         output_file = BytesIO(final_obfuscated_code.encode('utf-8'))
         output_file.name = output_filename
         
         # Отправка обфусцированного файла
-        update.message.reply_document(output_file, 
-                                     caption=f"Ваш код обфусцирован с ключом: `{obf_key}`",
-                                     parse_mode=telegram.ParseMode.MARKDOWN)
+        caption_text = f"Ваш код обфусцирован с ключом: `{obf_key}`"
+        bot.send_document(message.chat.id, output_file, 
+                          caption=caption_text, 
+                          parse_mode='Markdown',
+                          visible_file_name=output_filename)
         
     except Exception as e:
         logger.error(f"Ошибка при обработке файла: {e}")
-        update.message.reply_text("Произошла ошибка при обфускации файла.")
-
-dispatcher.add_handler(CommandHandler('start', start))
-# ОТКАТ: Используем старый синтаксис Filters.document
-dispatcher.add_handler(MessageHandler(Filters.document, handle_file)) 
+        bot.send_message(message.chat.id, "Произошла ошибка при обфускации файла.")
 
 # --- ОБРАБОТЧИКИ WEBHOOK (ДЛЯ RENDER) ---
 
@@ -148,24 +140,25 @@ def hello():
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     """Обрабатывает входящие обновления от Telegram."""
-    if request.method == "POST":
-        update = telegram.Update.de_json(request.get_json(force=True), bot)
-        dispatcher.process_update(update)
-    return 'ok'
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return 'ok'
+    return '!'
 
 def set_webhook_url():
     """Устанавливает URL Webhook, используя адрес Render."""
     RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
     if RENDER_EXTERNAL_HOSTNAME:
-        # Полный URL, куда Telegram должен отправлять обновления
         webhook_url = f'https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}'
         
-        # Устанавливаем Webhook
-        success = bot.set_webhook(url=webhook_url)
-        if success:
+        # Устанавливаем Webhook (новая библиотека)
+        try:
+            bot.set_webhook(url=webhook_url)
             logger.info(f"Webhook успешно установлен на: {webhook_url}")
-        else:
-            logger.error("Не удалось установить Webhook. Проверьте токен или логи.")
+        except Exception as e:
+            logger.error(f"Не удалось установить Webhook: {e}")
     else:
         logger.warning("RENDER_EXTERNAL_HOSTNAME не найден. Пропуск установки Webhook.")
 
