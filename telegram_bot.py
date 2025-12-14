@@ -43,7 +43,7 @@ application = (
     .build()
 )
 
-# --- ЛОКАЛИЗАЦИЯ (ИЗМЕНЕНО) ---
+# --- ЛОКАЛИЗАЦИЯ (с экранированием) ---
 TEXTS = {
     'en': {
         'start': "👋 **Meloten Obfuscator**\n\n**INSTRUCTIONS:**\n1\\. Send me your \\.lua or \\.txt file\\.\n2\\. I will ask you to select the target platform\\.\n3\\. Done\\! I will send you the obfuscated file and the key\\.",
@@ -93,6 +93,7 @@ def xor_obfuscate(data: bytes, key: str) -> str:
     return encoded_data.decode('utf-8')
 
 def escape_markdown_v2(text: str) -> str:
+    """Экранирует специальные символы для MarkdownV2, включая двойное экранирование обратного слеша."""
     specials = r'\_*[]()~`>#+-=|{}.!'
     for char in specials:
         text = text.replace(char, f'\\{char}')
@@ -100,6 +101,7 @@ def escape_markdown_v2(text: str) -> str:
     return text
 
 # --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (Без изменений) ---
+# ... (Оставлены без изменений для краткости, они работают) ...
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -120,8 +122,6 @@ end
 """
 
 def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
-    """Генерирует финальный загрузчик с полной стрингификацией логики."""
-    
     if mode == 'roblox_exec':
         xor_logic = "local XorFunc = bit.bxor or bit32.bxor"
     elif mode == 'roblox_studio':
@@ -295,37 +295,41 @@ run(code)()
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await query.answer() # Сначала подтверждаем нажатие!
     
     lang_code = query.data.split('_')[1]
     chat_id = update.effective_chat.id
     
+    # Сохраняем язык
     if chat_id not in application.user_data:
         application.user_data[chat_id] = {}
     application.user_data[chat_id]['lang'] = lang_code
     
-    # 1. Отправляем сообщение об успешной установке языка
-    text = get_text(chat_id, 'language_set')
+    # 1. Формируем текст об успешной установке (с экранированием)
+    raw_text = get_text(chat_id, 'language_set')
+    escaped_text = escape_markdown_v2(raw_text) # Экранируем специальные символы
+    
+    # 2. Пытаемся отредактировать сообщение с выбором языка
     try:
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+        await query.edit_message_text(escaped_text, parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
         logger.warning(f"Failed to edit language message: {e}")
-        await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2)
+        # Если не удалось отредактировать, отправляем новое сообщение
+        await context.bot.send_message(chat_id, escaped_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-    # 2. ГАРАНТИРОВАННО ОТПРАВЛЯЕМ ПОДРОБНУЮ ИНСТРУКЦИЮ (start_text)
+    # 3. Отправляем подробную инструкцию
     start_text = get_text(chat_id, 'start')
     await context.bot.send_message(chat_id, start_text, parse_mode=ParseMode.MARKDOWN_V2)
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    # Если язык уже выбран, отправляем инструкцию
     if application.user_data.get(chat_id, {}).get('lang'):
         start_text = get_text(chat_id, 'start')
         await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN_V2)
         return
         
-    # Если язык не выбран, предлагаем выбор
     keyboard = [
         [InlineKeyboardButton("🇬🇧 English", callback_data='setlang_en')],
         [InlineKeyboardButton("🇷🇺 Russian", callback_data='setlang_ru')],
