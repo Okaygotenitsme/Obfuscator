@@ -15,7 +15,6 @@ from telegram.ext import (
     Application, 
     MessageHandler, 
     CommandHandler, 
-    CallbackQueryHandler, 
     ContextTypes, 
     filters,
     ApplicationBuilder
@@ -47,7 +46,7 @@ application = (
 TEXTS = {
     'en': {
         'start': "👋 **Meloten Obfuscator**\n\n**INSTRUCTIONS:**\n1\\. Send me your \\.lua or \\.txt file\\.\n2\\. I will ask you to select the target platform\\.\n3\\. Done\\! I will send you the obfuscated file and the key\\.",
-        'select_lang': "🌐 Choose your language:",
+        'select_lang': "🌐 Choose and type your language:\n`English` or `Русский`",
         'language_set': "Language set to **English**.",
         'invalid_file': "⛔ Only \\.lua or \\.txt files are accepted!",
         'file_accepted': "File `{}` accepted.\nSelect the target platform:",
@@ -58,7 +57,7 @@ TEXTS = {
     },
     'ru': {
         'start': "👋 **Meloten Obfuscator**\n\n**ИНСТРУКЦИЯ:**\n1\\. Отправь мне файл \\.lua или \\.txt\\.\n2\\. Я попрошу тебя выбрать целевую платформу\\.\n3\\. Готово\\! Я пришлю обфусцированный файл и ключ\\.",
-        'select_lang': "🌐 Выберите ваш язык:",
+        'select_lang': "🌐 Выбери и напиши свой язык:\n`English` или `Русский`",
         'language_set': "Язык установлен на **Русский**\\.",
         'invalid_file': "⛔ Только файлы \\.lua и \\.txt\\!",
         'file_accepted': "Файл `{}` принят\\.\nВыберите целевую платформу:",
@@ -72,7 +71,6 @@ TEXTS = {
 # --- ИСПРАВЛЕНО: Теперь принимает context для доступа к user_data ---
 def get_text(chat_id, key, context: ContextTypes.DEFAULT_TYPE):
     """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
-    # Используем context.application.user_data для доступа к глобальным данным
     lang = context.application.user_data.get(chat_id, {}).get('lang', 'ru')
     return TEXTS.get(lang, TEXTS['ru']).get(key, TEXTS['ru'][key])
 
@@ -103,6 +101,7 @@ def escape_markdown_v2(text: str) -> str:
     return text
 
 # --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (Без изменений) ---
+# ... (Оставлены без изменений для краткости, они работают) ...
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -121,7 +120,6 @@ local function B64(data)
     end))
 end
 """
-# ... (Остальной код get_loader без изменений) ...
 
 def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
     if mode == 'roblox_exec':
@@ -295,34 +293,30 @@ run(code)()
 
 # --- ХЕНДЛЕРЫ ---
 
-async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer() 
-    
-    lang_code = query.data.split('_')[1]
+async def set_language_by_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    text = update.message.text.lower()
     
-    # --- ИСПРАВЛЕНО: Записываем в context.application.user_data ---
-    # Инициализируем словарь, если его нет
+    # Определяем код языка
+    if 'english' in text:
+        lang_code = 'en'
+    elif 'русский' in text:
+        lang_code = 'ru'
+    else:
+        # Если пришел невалидный текст, игнорируем его
+        return
+        
+    # --- Записываем язык в глобальное хранилище ---
     if chat_id not in context.application.user_data:
         context.application.user_data[chat_id] = {}
-    
-    # Записываем язык
     context.application.user_data[chat_id]['lang'] = lang_code
     
-    # 1. Формируем текст об успешной установке (с экранированием)
+    # 1. Отправляем сообщение об успешной установке языка
     raw_text = get_text(chat_id, 'language_set', context)
     escaped_text = escape_markdown_v2(raw_text) 
-    
-    # 2. Пытаемся отредактировать сообщение с выбором языка
-    try:
-        await query.edit_message_text(escaped_text, parse_mode=ParseMode.MARKDOWN_V2)
-    except Exception as e:
-        logger.warning(f"Failed to edit language message: {e}")
-        # Если не удалось отредактировать, отправляем новое сообщение
-        await context.bot.send_message(chat_id, escaped_text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(escaped_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-    # 3. Отправляем подробную инструкцию
+    # 2. Отправляем подробную инструкцию
     start_text = get_text(chat_id, 'start', context)
     await context.bot.send_message(chat_id, start_text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -330,28 +324,25 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    # --- ИСПРАВЛЕНО: Используем context.application.user_data для проверки ---
+    # Если язык уже выбран, отправляем инструкцию
     if context.application.user_data.get(chat_id, {}).get('lang'):
         start_text = get_text(chat_id, 'start', context)
         await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN_V2)
         return
         
-    keyboard = [
-        [InlineKeyboardButton("🇬🇧 English", callback_data='setlang_en')],
-        [InlineKeyboardButton("🇷🇺 Russian", callback_data='setlang_ru')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    # Если язык не выбран, просим ввести его текстом
+    text_prompt = TEXTS['ru']['select_lang'] # Используем русский как язык по умолчанию
     
     await update.message.reply_text(
-        TEXTS['ru']['select_lang'], 
-        reply_markup=reply_markup
+        text_prompt,
+        parse_mode=ParseMode.MARKDOWN_V2
     )
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    # --- ИСПРАВЛЕНО: Используем context.application.user_data для проверки ---
+    # Проверяем, выбран ли язык (теперь на основе данных, а не ReplyMarkup)
     if not context.application.user_data.get(chat_id, {}).get('lang'):
         await update.message.reply_text("Пожалуйста, выберите язык с помощью команды /start.", parse_mode=ParseMode.MARKDOWN_V2)
         return
@@ -367,6 +358,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['file_id'] = doc.file_id
     context.user_data['file_name'] = doc.file_name
 
+    # Создаем InlineKeyboard для выбора платформы
     keyboard = [
         [InlineKeyboardButton("🎮 Roblox (Executors)", callback_data='roblox_exec')],
         [InlineKeyboardButton("🛠 Roblox Studio (bit32)", callback_data='roblox_studio')],
@@ -385,6 +377,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Этот хендлер остался для кнопок выбора платформы (CallbackQueryHandler)
     query = update.callback_query
     chat_id = update.effective_chat.id
     
@@ -403,6 +396,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         escaped_file_name = escape_markdown_v2(file_name)
         text = get_text(chat_id, 'encrypting', context).format(escaped_file_name, mode)
         
+        # Редактирование сообщения с кнопками платформы
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
         f = await context.bot.get_file(file_id)
@@ -447,17 +441,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
              await context.bot.send_message(chat_id, error_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-# --- ИНИЦИАЛИЗАЦИЯ (Без изменений) ---
+# --- ИНИЦИАЛИЗАЦИЯ ---
 
 def init_app():
+    # 1. Обработчик команды /start
     application.add_handler(CommandHandler('start', start_command))
-    application.add_handler(CallbackQueryHandler(set_language, pattern='^setlang_')) 
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    application.add_handler(CallbackQueryHandler(button_callback))
     
-    # --- УДАЛЕНО: Инициализация application.user_data, теперь оно управляется PTB ---
-    # if not hasattr(application, 'user_data'):
-    #     application.user_data = {}
+    # 2. НОВЫЙ Обработчик текстового ввода для выбора языка
+    language_filter = filters.Regex(r'^(English|Русский)$', flags=0)
+    application.add_handler(MessageHandler(language_filter, set_language_by_text))
+    
+    # 3. Обработчик документов
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    # 4. Обработчик кнопок обфускации (CallbackQueryHandler)
+    # ПРИМЕЧАНИЕ: Этот хендлер ловит все оставшиеся колбэки, которые не поймал set_language_by_text
+    application.add_handler(CallbackQueryHandler(button_callback))
     
     loop.run_until_complete(application.initialize())
     try:
