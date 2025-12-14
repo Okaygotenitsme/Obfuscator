@@ -10,7 +10,7 @@ import time
 from flask import Flask, request
 import re 
 
-# --- ИМПОРТЫ (без изменений) ---
+# --- ИМПОРТЫ ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
 from telegram.ext import (
     Application, 
@@ -23,7 +23,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode 
 
-# --- КОНФИГУРАЦИЯ (без изменений) ---
+# --- КОНФИГУРАЦИЯ ---
 
 FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', FALLBACK_TOKEN)
@@ -32,6 +32,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+# Инициализация asyncio для работы с Webhook
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
@@ -44,9 +45,9 @@ application = (
     .build()
 )
 
-# --- ДВУЯЗЫЧНЫЕ СООБЩЕНИЯ (ВОССТАНОВЛЕННАЯ СТАРАЯ ИНСТРУКЦИЯ) ---
+# --- ДВУЯЗЫЧНЫЕ СООБЩЕНИЯ (БЕЗ ВЫБОРА ЯЗЫКА) ---
 BILINGUAL_TEXTS = {
-    # ВОССТАНОВЛЕННАЯ СТАРАЯ ИНСТРУКЦИЯ
+    # Краткая инструкция по запросу пользователя
     'start': (
         "👋 **Meloten Obfuscator**\n\n"
         "**INSTRUCTIONS / ИНСТРУКЦИЯ:**\n"
@@ -62,8 +63,7 @@ BILINGUAL_TEXTS = {
     'error': "❌ Critical Error / Критическая ошибка: `{}`",
 }
 
-# --- УТИЛИТЫ ОБФУСКАЦИИ (Без изменений) ---
-# ... (Весь код обфускации, включая get_loader, остается без изменений) ...
+# --- УТИЛИТЫ ОБФУСКАЦИИ ---
 
 KEY_LENGTH = 32
 TIME_LIMIT = 0.05 
@@ -89,7 +89,7 @@ def escape_markdown_v2(text: str) -> str:
     text = text.replace('\\', '\\\\')
     return text
 
-# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (Оставлены без изменений для краткости) ---
+# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ ---
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -279,7 +279,7 @@ run(code)()
     
     return FINAl_SCRIPT
 
-# --- ХЕНДЛЕРЫ (без изменений, кроме использования BILINGUAL_TEXTS) ---
+# --- ХЕНДЛЕРЫ ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отправляем двуязычную, краткую инструкцию
@@ -290,10 +290,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
         
+    # Важно: .document будет None, если это не файл, но filters.Document.ALL это должно отсечь
     doc = update.message.document
+    
+    # Проверка, что update.message и doc существуют
+    if not update.message or not doc:
+         # Это не должно происходить, если фильтр работает правильно, но на всякий случай
+         return 
+
     filename = doc.file_name.lower()
     
-    if not doc or not (filename.endswith('.lua') or filename.endswith('.txt')):
+    if not (filename.endswith('.lua') or filename.endswith('.txt')):
         text = BILINGUAL_TEXTS['invalid_file']
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
@@ -382,11 +389,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
              await context.bot.send_message(chat_id, error_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-# --- ИНИЦИАЛИЗАЦИЯ (без изменений) ---
+# --- ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ ---
 
 def init_app():
+    # 1. Обработчик команды /start
     application.add_handler(CommandHandler('start', start_command))
+    
+    # 2. Обработчик документов (ВСЕГДА ЛОВИТ ФАЙЛЫ)
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    # 3. Обработчик кнопок обфускации
     application.add_handler(CallbackQueryHandler(button_callback))
     
     loop.run_until_complete(application.initialize())
@@ -401,6 +413,7 @@ def set_webhook():
     if host:
         url = f'https://{host}/{TOKEN}'
         try:
+            # Устанавливаем Webhook с drop_pending_updates=True
             requests.get(
                 f'https://api.telegram.org/bot{TOKEN}/setWebhook', 
                 params={'url': url, 'drop_pending_updates': 'True'},
@@ -410,17 +423,20 @@ def set_webhook():
         except Exception as e:
             logger.error(f"Webhook fail: {e}")
 
-# --- РОУТЫ (Без изменений) ---
+# --- РОУТЫ FLASK (для Webhook) ---
 
 @app.route('/', methods=['GET'])
 def index():
+    # Проверка, что Flask работает
     return "Bot is running.", 200
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
+    # Обработка входящего Webhook-запроса от Telegram
     if request.method == "POST":
         try:
             update = Update.de_json(request.get_json(force=True), application.bot)
+            # Передача обновления в python-telegram-bot
             loop.run_until_complete(application.process_update(update))
         except Exception as e:
             logger.error(f"Update error: {e}")
