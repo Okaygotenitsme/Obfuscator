@@ -44,7 +44,7 @@ application = (
     .build()
 )
 
-# --- ЛОКАЛИЗАЦИЯ (Без изменений) ---
+# --- ЛОКАЛИЗАЦИЯ (Двуязычная) ---
 TEXTS = {
     'en': {
         'start': "👋 **Meloten Obfuscator**\n\n**INSTRUCTIONS:**\n1\\. Send me your \\.lua or \\.txt file\\.\n2\\. I will ask you to select the target platform\\.\n3\\. Done\\! I will send you the obfuscated file and the key\\.",
@@ -72,10 +72,11 @@ TEXTS = {
 
 def get_text(chat_id, key, context: ContextTypes.DEFAULT_TYPE):
     """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
+    # Используем context.application.user_data для доступа к глобальным данным
     lang = context.application.user_data.get(chat_id, {}).get('lang', 'ru')
     return TEXTS.get(lang, TEXTS['ru']).get(key, TEXTS['ru'][key])
 
-# --- УТИЛИТЫ ОБФУСКАЦИИ (Без изменений) ---
+# --- УТИЛИТЫ ОБФУСКАЦИИ (Самая сильная версия) ---
 
 KEY_LENGTH = 32
 TIME_LIMIT = 0.05 
@@ -295,14 +296,13 @@ run(code)()
 
 async def set_language_by_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    # Используем update.message.text, так как MessageHandler с filters.TEXT его гарантирует
     text = update.message.text.lower()
     
-    # Дополнительная проверка, чтобы не перехватывать другие сообщения
-    if not (context.application.user_data.get(chat_id, {}).get('lang') is None):
+    # 1. Проверяем, что язык еще не установлен. Если установлен, игнорируем ввод.
+    if context.application.user_data.get(chat_id, {}).get('lang'):
         return
         
-    # Определяем код языка
+    # 2. Определяем код языка
     if 'english' in text:
         lang_code = 'en'
     elif 'русский' in text:
@@ -310,17 +310,17 @@ async def set_language_by_text(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         return
         
-    # --- Записываем язык в глобальное хранилище ---
+    # 3. Записываем язык в глобальное хранилище
     if chat_id not in context.application.user_data:
         context.application.user_data[chat_id] = {}
     context.application.user_data[chat_id]['lang'] = lang_code
     
-    # 1. Отправляем сообщение об успешной установке языка
+    # 4. Отправляем сообщение об успешной установке языка
     raw_text = get_text(chat_id, 'language_set', context)
     escaped_text = escape_markdown_v2(raw_text) 
     await update.message.reply_text(escaped_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-    # 2. Отправляем подробную инструкцию
+    # 5. Отправляем подробную инструкцию
     start_text = get_text(chat_id, 'start', context)
     await context.bot.send_message(chat_id, start_text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -394,7 +394,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not file_id:
         text = get_text(chat_id, 'file_expired', context)
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+        await query.edit_message_text(escape_markdown_v2(text), parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:
@@ -451,16 +451,16 @@ def init_app():
     # 1. Обработчик команды /start
     application.add_handler(CommandHandler('start', start_command))
     
-    # 2. ИСПРАВЛЕННЫЙ Обработчик текстового ввода для выбора языка
-    # Должен идти первым среди MessageHandler, чтобы перехватить ввод 'English'/'Русский'
+    # 2. Обработчик текстового ввода для выбора языка
+    # ФИКС: Убедимся, что этот хендлер идет перед обработчиком документов и корректно использует Regex
     language_regex = re.compile(r'^(English|Русский)$', re.IGNORECASE)
     language_filter = filters.TEXT & filters.Regex(language_regex)
     application.add_handler(MessageHandler(language_filter, set_language_by_text))
     
-    # 3. Обработчик документов (должен идти после текстового)
+    # 3. Обработчик документов
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
-    # 4. Обработчик кнопок обфускации (CallbackQueryHandler)
+    # 4. Обработчик кнопок обфускации
     application.add_handler(CallbackQueryHandler(button_callback))
     
     loop.run_until_complete(application.initialize())
