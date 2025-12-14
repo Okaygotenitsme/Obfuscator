@@ -10,7 +10,7 @@ import time
 from flask import Flask, request
 import re 
 
-# --- ИМПОРТЫ ---
+# --- ИМПОРТЫ (без изменений) ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
 from telegram.ext import (
     Application, 
@@ -23,7 +23,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode 
 
-# --- КОНФИГУРАЦИЯ ---
+# --- КОНФИГУРАЦИЯ (без изменений) ---
 
 FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', FALLBACK_TOKEN)
@@ -44,39 +44,26 @@ application = (
     .build()
 )
 
-# --- ЛОКАЛИЗАЦИЯ (Двуязычная) ---
-TEXTS = {
-    'en': {
-        'start': "👋 **Meloten Obfuscator**\n\n**INSTRUCTIONS:**\n1\\. Send me your \\.lua or \\.txt file\\.\n2\\. I will ask you to select the target platform\\.\n3\\. Done\\! I will send you the obfuscated file and the key\\.",
-        'select_lang': "🌐 Choose and type your language:\n`English` or `Русский`",
-        'language_set': "Language set to **English**.",
-        'invalid_file': "⛔ Only \\.lua or \\.txt files are accepted!",
-        'file_accepted': "File `{}` accepted.\nSelect the target platform:",
-        'file_expired': "⚠️ File is expired or not found. Please send it again.",
-        'encrypting': "⏳ Encrypting file: `{}` for platform `{}`...",
-        'done': "✅ Done!\n🔑 Key: ||`{}`||\n⚙️ Mode: `{}`",
-        'error': "❌ Critical Error: `{}`",
-    },
-    'ru': {
-        'start': "👋 **Meloten Obfuscator**\n\n**ИНСТРУКЦИЯ:**\n1\\. Отправь мне файл \\.lua или \\.txt\\.\n2\\. Я попрошу тебя выбрать целевую платформу\\.\n3\\. Готово\\! Я пришлю обфусцированный файл и ключ\\.",
-        'select_lang': "🌐 Выбери и напиши свой язык:\n`English` или `Русский`",
-        'language_set': "Язык установлен на **Русский**\\.",
-        'invalid_file': "⛔ Только файлы \\.lua и \\.txt\\!",
-        'file_accepted': "Файл `{}` принят\\.\nВыберите целевую платформу:",
-        'file_expired': "⚠️ Файл устарел или не найден\\. Отправьте снова\\.",
-        'encrypting': "⏳ Шифрую файл: `{}` для платформы `{}`\\.\\.\\.",
-        'done': "✅ Готово\\!\n🔑 Key: ||`{}`||\n⚙️ Mode: `{}`",
-        'error': "❌ Критическая ошибка: `{}`",
-    }
+# --- ДВУЯЗЫЧНЫЕ СООБЩЕНИЯ (ВОССТАНОВЛЕННАЯ СТАРАЯ ИНСТРУКЦИЯ) ---
+BILINGUAL_TEXTS = {
+    # ВОССТАНОВЛЕННАЯ СТАРАЯ ИНСТРУКЦИЯ
+    'start': (
+        "👋 **Meloten Obfuscator**\n\n"
+        "**INSTRUCTIONS / ИНСТРУКЦИЯ:**\n"
+        "1\\. Send your \\.lua or \\.txt file / Отправь файл \\.lua или \\.txt\\.\n"
+        "2\\. Select the target platform / Выбери целевую платформу\\.\n"
+        "3\\. Get the file and key / Получи файл и ключ\\."
+    ),
+    'invalid_file': "⛔ Only \\.lua or \\.txt files are accepted / Только файлы \\.lua и \\.txt\\!",
+    'file_accepted': "File `{}` accepted / Файл `{}` принят\\.\nSelect the target platform / Выберите целевую платформу:",
+    'file_expired': "⚠️ File is expired or not found / Файл устарел или не найден\\. Please send it again / Отправьте снова\\.",
+    'encrypting': "⏳ Encrypting file: `{}` for platform `{}` / Шифрую файл: `{}` для платформы `{}`\\.\\.\\.",
+    'done': "✅ Done / Готово\\!\n🔑 Key / Ключ: ||`{}`||\n⚙️ Mode / Режим: `{}`",
+    'error': "❌ Critical Error / Критическая ошибка: `{}`",
 }
 
-def get_text(chat_id, key, context: ContextTypes.DEFAULT_TYPE):
-    """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
-    # Используем context.application.user_data для доступа к глобальным данным
-    lang = context.application.user_data.get(chat_id, {}).get('lang', 'ru')
-    return TEXTS.get(lang, TEXTS['ru']).get(key, TEXTS['ru'][key])
-
-# --- УТИЛИТЫ ОБФУСКАЦИИ (Самая сильная версия) ---
+# --- УТИЛИТЫ ОБФУСКАЦИИ (Без изменений) ---
+# ... (Весь код обфускации, включая get_loader, остается без изменений) ...
 
 KEY_LENGTH = 32
 TIME_LIMIT = 0.05 
@@ -102,7 +89,7 @@ def escape_markdown_v2(text: str) -> str:
     text = text.replace('\\', '\\\\')
     return text
 
-# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (Без изменений) ---
+# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (Оставлены без изменений для краткости) ---
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -292,72 +279,22 @@ run(code)()
     
     return FINAl_SCRIPT
 
-# --- ХЕНДЛЕРЫ ---
-
-async def set_language_by_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    text = update.message.text.lower()
-    
-    # 1. Проверяем, что язык еще не установлен. Если установлен, игнорируем ввод.
-    if context.application.user_data.get(chat_id, {}).get('lang'):
-        return
-        
-    # 2. Определяем код языка
-    if 'english' in text:
-        lang_code = 'en'
-    elif 'русский' in text:
-        lang_code = 'ru'
-    else:
-        return
-        
-    # 3. Записываем язык в глобальное хранилище
-    if chat_id not in context.application.user_data:
-        context.application.user_data[chat_id] = {}
-    context.application.user_data[chat_id]['lang'] = lang_code
-    
-    # 4. Отправляем сообщение об успешной установке языка
-    raw_text = get_text(chat_id, 'language_set', context)
-    escaped_text = escape_markdown_v2(raw_text) 
-    await update.message.reply_text(escaped_text, parse_mode=ParseMode.MARKDOWN_V2)
-
-    # 5. Отправляем подробную инструкцию
-    start_text = get_text(chat_id, 'start', context)
-    await context.bot.send_message(chat_id, start_text, parse_mode=ParseMode.MARKDOWN_V2)
-
+# --- ХЕНДЛЕРЫ (без изменений, кроме использования BILINGUAL_TEXTS) ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    
-    # Если язык уже выбран, отправляем инструкцию
-    if context.application.user_data.get(chat_id, {}).get('lang'):
-        start_text = get_text(chat_id, 'start', context)
-        await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN_V2)
-        return
-        
-    # Если язык не выбран, просим ввести его текстом
-    text_prompt = TEXTS['ru']['select_lang'] 
-    
-    await update.message.reply_text(
-        text_prompt,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    # Отправляем двуязычную, краткую инструкцию
+    start_text = BILINGUAL_TEXTS['start']
+    await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN_V2)
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    
-    # Проверяем, выбран ли язык 
-    if not context.application.user_data.get(chat_id, {}).get('lang'):
-        # Если язык не выбран, просим его выбрать
-        text = TEXTS['ru']['select_lang'] 
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
-        return
         
     doc = update.message.document
     filename = doc.file_name.lower()
     
     if not doc or not (filename.endswith('.lua') or filename.endswith('.txt')):
-        text = get_text(chat_id, 'invalid_file', context)
+        text = BILINGUAL_TEXTS['invalid_file']
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
@@ -374,7 +311,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     escaped_file_name = escape_markdown_v2(doc.file_name)
-    text = get_text(chat_id, 'file_accepted', context).format(escaped_file_name)
+    text = BILINGUAL_TEXTS['file_accepted'].format(escaped_file_name)
 
     await update.message.reply_text(
         text,
@@ -393,13 +330,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_name = context.user_data.get('file_name')
     
     if not file_id:
-        text = get_text(chat_id, 'file_expired', context)
+        text = BILINGUAL_TEXTS['file_expired']
         await query.edit_message_text(escape_markdown_v2(text), parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:
         escaped_file_name = escape_markdown_v2(file_name)
-        text = get_text(chat_id, 'encrypting', context).format(escaped_file_name, mode)
+        text = BILINGUAL_TEXTS['encrypting'].format(escaped_file_name, mode)
         
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -422,7 +359,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         escaped_key = escape_markdown_v2(final_key)
         
-        caption = get_text(chat_id, 'done', context).format(escaped_key, mode)
+        caption = BILINGUAL_TEXTS['done'].format(escaped_key, mode)
         
         await context.bot.send_document(
             chat_id=query.message.chat_id,
@@ -438,29 +375,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error processing callback: {e}")
         error_message = escape_markdown_v2(str(e))
-        error_text = get_text(chat_id, 'error', context).format(error_message)
+        error_text = BILINGUAL_TEXTS['error'].format(error_message)
         
         try:
             await query.edit_message_text(error_text, parse_mode=ParseMode.MARKDOWN_V2)
         except:
              await context.bot.send_message(chat_id, error_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-# --- ИНИЦИАЛИЗАЦИЯ ---
+# --- ИНИЦИАЛИЗАЦИЯ (без изменений) ---
 
 def init_app():
-    # 1. Обработчик команды /start
     application.add_handler(CommandHandler('start', start_command))
-    
-    # 2. Обработчик текстового ввода для выбора языка
-    # ФИКС: Убедимся, что этот хендлер идет перед обработчиком документов и корректно использует Regex
-    language_regex = re.compile(r'^(English|Русский)$', re.IGNORECASE)
-    language_filter = filters.TEXT & filters.Regex(language_regex)
-    application.add_handler(MessageHandler(language_filter, set_language_by_text))
-    
-    # 3. Обработчик документов
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    
-    # 4. Обработчик кнопок обфускации
     application.add_handler(CallbackQueryHandler(button_callback))
     
     loop.run_until_complete(application.initialize())
