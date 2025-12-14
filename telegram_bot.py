@@ -5,12 +5,12 @@ import string
 import base64
 import requests 
 from io import BytesIO
-import asyncio
 import time
 from flask import Flask, request
 import re 
+import json # Добавлен для удобства работы с JSON
 
-# --- ИМПОРТЫ ---
+# --- ИМПОРТЫ TELEGRAM ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
 from telegram.ext import (
     Application, 
@@ -26,16 +26,18 @@ from telegram.constants import ParseMode
 # --- КОНФИГУРАЦИЯ ---
 
 FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', FALLBACK_TOKEN)
+# Используем os.getenv для лучшей совместимости
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', FALLBACK_TOKEN)
+PORT = int(os.getenv('PORT', '8443')) # Стандартный порт для Render Webhook
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Инициализация Flask
 app = Flask(__name__)
-# Инициализация asyncio для работы с Webhook
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
 
+# Объявляем ApplicationBuilder глобально, но не запускаем
+# Его запуск будет внутри функции main, которая вызывается gunicorn
 application = (
     ApplicationBuilder()
     .token(TOKEN)
@@ -45,25 +47,59 @@ application = (
     .build()
 )
 
-# --- ДВУЯЗЫЧНЫЕ СООБЩЕНИЯ (БЕЗ ВЫБОРА ЯЗЫКА) ---
+# --- ДВУЯЗЫЧНЫЕ СООБЩЕНИЯ (С ВЫБОРОМ ЯЗЫКА) ---
 BILINGUAL_TEXTS = {
     # Краткая инструкция по запросу пользователя
-    'start': (
-        "👋 **Meloten Obfuscator**\n\n"
-        "**INSTRUCTIONS / ИНСТРУКЦИЯ:**\n"
-        "1\\. Send your \\.lua or \\.txt file / Отправь файл \\.lua или \\.txt\\.\n"
-        "2\\. Select the target platform / Выбери целевую платформу\\.\n"
-        "3\\. Get the file and key / Получи файл и ключ\\."
-    ),
-    'invalid_file': "⛔ Only \\.lua or \\.txt files are accepted / Только файлы \\.lua и \\.txt\\!",
-    'file_accepted': "File `{}` accepted / Файл `{}` принят\\.\nSelect the target platform / Выберите целевую платформу:",
-    'file_expired': "⚠️ File is expired or not found / Файл устарел или не найден\\. Please send it again / Отправьте снова\\.",
-    'encrypting': "⏳ Encrypting file: `{}` for platform `{}` / Шифрую файл: `{}` для платформы `{}`\\.\\.\\.",
-    'done': "✅ Done / Готово\\!\n🔑 Key / Ключ: ||`{}`||\n⚙️ Mode / Режим: `{}`",
-    'error': "❌ Critical Error / Критическая ошибка: `{}`",
+    'start': {
+        'en': "👋 **Meloten Obfuscator**\n\n**INSTRUCTIONS:**\n1\\. Send your \\.lua or \\.txt file\\.\n2\\. Select the target platform\\.\n3\\. Get the file and key\\.",
+        'ru': "👋 **Meloten Obfuscator**\n\n**ИНСТРУКЦИЯ:**\n1\\. Отправь файл \\.lua или \\.txt\\.\n2\\. Выбери целевую платформу\\.\n3\\. Получи файл и ключ\\.",
+    },
+    'language_select': {
+        'en': "🌐 Select your language / Выберите язык:",
+        'ru': "🌐 Select your language / Выберите язык:", # Отображаем оба языка для выбора
+    },
+    'invalid_file': {
+        'en': "⛔ Only \\.lua or \\.txt files are accepted\\!",
+        'ru': "⛔ Только файлы \\.lua и \\.txt\\!",
+    },
+    'file_accepted': {
+        'en': "File `{}` accepted\\.\nSelect the target platform:",
+        'ru': "Файл `{}` принят\\.\nВыберите целевую платформу:",
+    },
+    'file_expired': {
+        'en': "⚠️ File is expired or not found\\. Please send it again\\.",
+        'ru': "⚠️ Файл устарел или не найден\\. Отправьте снова\\.",
+    },
+    'encrypting': {
+        'en': "⏳ Encrypting file: `{}` for platform `{}`\\.\\.\\.",
+        'ru': "⏳ Шифрую файл: `{}` для платформы `{}`\\.\\.\\.",
+    },
+    'done': {
+        'en': "✅ Done\\!\n🔑 Key / Ключ: ||`{}`||\n⚙️ Mode / Режим: `{}`",
+        'ru': "✅ Готово\\!\n🔑 Key / Ключ: ||`{}`||\n⚙️ Режим: `{}`",
+    },
+    'error': {
+        'en': "❌ Critical Error: `{}`",
+        'ru': "❌ Критическая ошибка: `{}`",
+    },
+    'lang_set': {
+        'en': "Language set to English\\. Use /start to begin\\.",
+        'ru': "Язык установлен на Русский\\. Используйте /start для начала\\.",
+    }
 }
 
-# --- УТИЛИТЫ ОБФУСКАЦИИ ---
+DEFAULT_LANG = 'ru' # Устанавливаем язык по умолчанию
+
+def get_text(key: str, lang: str) -> str:
+    """Получает текст на выбранном языке, с возвратом на русский, если перевод не найден."""
+    return BILINGUAL_TEXTS.get(key, {}).get(lang, BILINGUAL_TEXTS.get(key, {}).get(DEFAULT_LANG, key))
+
+def get_user_lang(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Получает язык пользователя из user_data."""
+    return context.user_data.get('language', DEFAULT_LANG)
+
+
+# --- УТИЛИТЫ ОБФУСКАЦИИ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
 
 KEY_LENGTH = 32
 TIME_LIMIT = 0.05 
@@ -84,12 +120,14 @@ def xor_obfuscate(data: bytes, key: str) -> str:
 def escape_markdown_v2(text: str) -> str:
     """Экранирует специальные символы для MarkdownV2, включая двойное экранирование обратного слеша."""
     specials = r'\_*[]()~`>#+-=|{}.!'
+    # Экранирование всех специальных символов
     for char in specials:
         text = text.replace(char, f'\\{char}')
-    text = text.replace('\\', '\\\\')
+    # Двойное экранирование обратного слеша
+    text = text.replace('\\\\', '\\\\\\\\') 
     return text
 
-# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ ---
+# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -282,43 +320,55 @@ run(code)()
 # --- ХЕНДЛЕРЫ ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Отправляем двуязычную, краткую инструкцию
-    start_text = BILINGUAL_TEXTS['start']
+    lang = get_user_lang(context)
+    start_text = get_text('start', lang)
     await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN_V2)
 
+async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = get_text('language_select', DEFAULT_LANG)
+    
+    keyboard = [
+        [InlineKeyboardButton("English 🇬🇧", callback_data='lang_en')],
+        [InlineKeyboardButton("Русский 🇷🇺", callback_data='lang_ru')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = get_user_lang(context)
     chat_id = update.effective_chat.id
-        
-    # Важно: .document будет None, если это не файл, но filters.Document.ALL это должно отсечь
     doc = update.message.document
     
-    # Проверка, что update.message и doc существуют
     if not update.message or not doc:
-         # Это не должно происходить, если фильтр работает правильно, но на всякий случай
          return 
 
     filename = doc.file_name.lower()
     
     if not (filename.endswith('.lua') or filename.endswith('.txt')):
-        text = BILINGUAL_TEXTS['invalid_file']
+        text = get_text('invalid_file', lang)
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
+    # Сохраняем информацию о файле и очищаем данные, связанные с предыдущим файлом
     context.user_data['file_id'] = doc.file_id
     context.user_data['file_name'] = doc.file_name
 
     # Создаем InlineKeyboard для выбора платформы
-    keyboard = [
-        [InlineKeyboardButton("🎮 Roblox (Executors)", callback_data='roblox_exec')],
-        [InlineKeyboardButton("🛠 Roblox Studio (bit32)", callback_data='roblox_studio')],
-        [InlineKeyboardButton("🌐 Generic Lua (5.1/JIT)", callback_data='generic')],
-        [InlineKeyboardButton("🛡 Safe Native Lua (Slow, universal)", callback_data='safe_native')],
+    platform_keyboard = [
+        [InlineKeyboardButton(f"🎮 Roblox (Executors)", callback_data='mode_roblox_exec')],
+        [InlineKeyboardButton(f"🛠 Roblox Studio (bit32)", callback_data='mode_roblox_studio')],
+        [InlineKeyboardButton(f"🌐 Generic Lua (5.1/JIT)", callback_data='mode_generic')],
+        [InlineKeyboardButton(f"🛡 Safe Native Lua (Slow, universal)", callback_data='mode_safe_native')],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = InlineKeyboardMarkup(platform_keyboard)
     
     escaped_file_name = escape_markdown_v2(doc.file_name)
-    text = BILINGUAL_TEXTS['file_accepted'].format(escaped_file_name)
+    text = get_text('file_accepted', lang).format(escaped_file_name)
 
     await update.message.reply_text(
         text,
@@ -331,19 +381,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     await query.answer() 
+    
+    # Обработка выбора языка
+    if query.data.startswith('lang_'):
+        new_lang = query.data.split('_')[1]
+        context.user_data['language'] = new_lang
+        text = get_text('lang_set', new_lang)
+        await query.edit_message_text(text)
+        return
         
-    mode = query.data
+    # Обработка выбора режима обфускации
+    if query.data.startswith('mode_'):
+        mode = query.data.split('mode_')[1]
+    else:
+        # Неизвестный callback_data, игнорируем или обрабатываем ошибку
+        return
+
+    lang = get_user_lang(context)
     file_id = context.user_data.get('file_id')
     file_name = context.user_data.get('file_name')
     
     if not file_id:
-        text = BILINGUAL_TEXTS['file_expired']
+        text = get_text('file_expired', lang)
         await query.edit_message_text(escape_markdown_v2(text), parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:
         escaped_file_name = escape_markdown_v2(file_name)
-        text = BILINGUAL_TEXTS['encrypting'].format(escaped_file_name, mode)
+        text = get_text('encrypting', lang).format(escaped_file_name, mode)
         
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -359,6 +424,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_key = generate_key(KEY_LENGTH)
         encoded_data_base64 = xor_obfuscate(original_data_bytes, final_key)
         
+        # Получаем полный обфусцированный код с загрузчиком
         final_code = get_loader(mode, encoded_data_base64, final_key)
 
         output_file = BytesIO(final_code.encode('utf-8'))
@@ -366,8 +432,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         escaped_key = escape_markdown_v2(final_key)
         
-        caption = BILINGUAL_TEXTS['done'].format(escaped_key, mode)
+        caption = get_text('done', lang).format(escaped_key, mode)
         
+        # Отправляем обфусцированный файл
         await context.bot.send_document(
             chat_id=query.message.chat_id,
             document=output_file,
@@ -375,6 +442,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN_V2
         )
         
+        # Очистка данных после успешной обработки
         context.user_data.pop('file_id', None)
         context.user_data.pop('file_name', None)
 
@@ -382,65 +450,110 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error processing callback: {e}")
         error_message = escape_markdown_v2(str(e))
-        error_text = BILINGUAL_TEXTS['error'].format(error_message)
+        error_text = get_text('error', lang).format(error_message)
         
         try:
             await query.edit_message_text(error_text, parse_mode=ParseMode.MARKDOWN_V2)
         except:
              await context.bot.send_message(chat_id, error_text, parse_mode=ParseMode.MARKDOWN_V2)
 
+# --- РОУТЫ FLASK (для Webhook) ---
+
+# В этом новом подходе, мы используем application.updater и передаем ему запросы
+@app.route(f'/{TOKEN}', methods=['POST'])
+async def webhook():
+    # Получаем JSON из запроса
+    data = request.get_json(force=True)
+    # Создаем объект Update из JSON
+    update = Update.de_json(data, application.bot)
+    # Обрабатываем обновление
+    await application.process_update(update)
+    return 'ok'
+
+@app.route('/', methods=['GET'])
+async def index():
+    return "Bot is running.", 200
+
 # --- ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ ---
 
-def init_app():
+def main():
     # 1. Обработчик команды /start
     application.add_handler(CommandHandler('start', start_command))
     
-    # 2. Обработчик документов (ВСЕГДА ЛОВИТ ФАЙЛЫ)
+    # 2. Обработчик команды /language
+    application.add_handler(CommandHandler('language', language_command))
+    
+    # 3. Обработчик документов (ВСЕГДА ЛОВИТ ФАЙЛЫ)
+    # Этот хендлер будет ловить файлы .lua/.txt благодаря внутренней проверке
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
-    # 3. Обработчик кнопок обфускации
+    # 4. Обработчик кнопок (для выбора платформы и языка)
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    loop.run_until_complete(application.initialize())
-    try:
-        loop.run_until_complete(application.start())
-    except Exception as e:
-        logger.warning(f"App start warning: {e}")
-        pass
-
-def set_webhook():
+    # Установка Webhook
     host = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
     if host:
         url = f'https://{host}/{TOKEN}'
-        try:
-            # Устанавливаем Webhook с drop_pending_updates=True
-            requests.get(
-                f'https://api.telegram.org/bot{TOKEN}/setWebhook', 
-                params={'url': url, 'drop_pending_updates': 'True'},
-                timeout=10
-            )
-            logger.info(f"Webhook set: {url}")
-        except Exception as e:
-            logger.error(f"Webhook fail: {e}")
+        # application.run_webhook сам установит Webhook и запустит приложение Flask (под gunicorn)
+        application.run_webhook(
+            listen='0.0.0.0',
+            port=PORT,
+            url_path=TOKEN,
+            webhook_url=url,
+            drop_pending_updates=True
+        )
+        logger.info(f"Webhook set and app started: {url}")
+    else:
+        # Локальный запуск (для отладки, если нет RENDER_EXTERNAL_HOSTNAME)
+        logger.warning("RENDER_EXTERNAL_HOSTNAME not set. Falling back to polling (for testing).")
+        application.run_polling(poll_interval=2.0)
 
-# --- РОУТЫ FLASK (для Webhook) ---
+# Для gunicorn
+if __name__ != '__main__':
+    # Эта часть не используется, так как gunicorn будет импортировать 'app', 
+    # а затем мы используем Application.run_webhook
+    pass
 
-@app.route('/', methods=['GET'])
-def index():
-    # Проверка, что Flask работает
-    return "Bot is running.", 200
+# Теперь нам нужно изменить Procfile, чтобы Gunicorn вызывал main
+# Но так как вы хотите использовать Flask + Gunicorn, мы оставим app=Flask() и route, 
+# и вместо application.run_webhook используем start_webhook_mode, 
+# который устанавливает вебхук при запуске gunicorn, а затем сам обработчик webhook 
+# вызывает application.process_update.
+#
+# Сначала удалим нерабочие части инициализации из оригинального кода:
 
-@app.route(f'/{TOKEN}', methods=['POST'])
-def webhook():
-    # Обработка входящего Webhook-запроса от Telegram
-    if request.method == "POST":
-        try:
-            update = Update.de_json(request.get_json(force=True), application.bot)
-            # Передача обновления в python-telegram-bot
-            loop.run_until_complete(application.process_update(update))
-        except Exception as e:
-            logger.error(f"Update error: {e}")
-    return 'ok'
+# СТАРЫЙ КОД (УДАЛИТЬ):
+# loop = asyncio.new_event_loop() 
+# asyncio.set_event_loop(loop)
+# 
+# def init_app():
+#    ... (добавление хендлеров)
+#    loop.run_until_complete(application.initialize())
+#    try:
+#        loop.run_until_complete(application.start())
+#    except Exception as e:
+#        logger.warning(f"App start warning: {e}")
+#        pass
+#
+# init_app()
+# set_webhook()
 
-init_app()
-set_webhook()
+# НОВАЯ ЛОГИКА ДЛЯ GUNICORN + FLASK:
+
+def start_webhook_mode():
+    """Добавляет хендлеры и устанавливает webhook при запуске Gunicorn."""
+    
+    # 1. Обработчик команды /start
+    application.add_handler(CommandHandler('start', start_command))
+    
+    # 2. Обработчик команды /language
+    application.add_handler(CommandHandler('language', language_command))
+    
+    # 3. Обработчик документов 
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    # 4. Обработчик кнопок
+    application.add_handler(CallbackQueryHandler(button_callback))
+
+    # Установка Webhook
+    host = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
