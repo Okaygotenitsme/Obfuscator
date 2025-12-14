@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode 
 
-# --- КОНФИГУРАЦИЯ ---
+# --- КОНФИГУРАЦИЯ (Без изменений) ---
 
 FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', FALLBACK_TOKEN)
@@ -43,13 +43,13 @@ application = (
     .build()
 )
 
-# --- ЛОКАЛИЗАЦИЯ ---
+# --- ЛОКАЛИЗАЦИЯ (ИЗМЕНЕНО) ---
 TEXTS = {
     'en': {
-        'start': "👋 **Meloten Obfuscator**\n\nUpload your .lua or .txt file.",
+        'start': "👋 **Meloten Obfuscator**\n\n**INSTRUCTIONS:**\n1\\. Send me your \\.lua or \\.txt file\\.\n2\\. I will ask you to select the target platform\\.\n3\\. Done\\! I will send you the obfuscated file and the key\\.",
         'select_lang': "🌐 Choose your language:",
         'language_set': "Language set to **English**.",
-        'invalid_file': "⛔ Only .lua or .txt files are accepted!",
+        'invalid_file': "⛔ Only \\.lua or \\.txt files are accepted!",
         'file_accepted': "File `{}` accepted.\nSelect the target platform:",
         'file_expired': "⚠️ File is expired or not found. Please send it again.",
         'encrypting': "⏳ Encrypting file: `{}` for platform `{}`...",
@@ -57,7 +57,7 @@ TEXTS = {
         'error': "❌ Critical Error: `{}`",
     },
     'ru': {
-        'start': "👋 **Meloten Obfuscator**\n\nОтправь мне файл \\.lua или \\.txt\\.",
+        'start': "👋 **Meloten Obfuscator**\n\n**ИНСТРУКЦИЯ:**\n1\\. Отправь мне файл \\.lua или \\.txt\\.\n2\\. Я попрошу тебя выбрать целевую платформу\\.\n3\\. Готово\\! Я пришлю обфусцированный файл и ключ\\.",
         'select_lang': "🌐 Выберите ваш язык:",
         'language_set': "Язык установлен на **Русский**\\.",
         'invalid_file': "⛔ Только файлы \\.lua и \\.txt\\!",
@@ -71,11 +71,10 @@ TEXTS = {
 
 def get_text(chat_id, key):
     """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
-    # Используем application.user_data для сохранения языка между запросами
     lang = application.user_data.get(chat_id, {}).get('lang', 'ru')
     return TEXTS.get(lang, TEXTS['ru']).get(key, TEXTS['ru'][key])
 
-# --- УТИЛИТЫ ОБФУСКАЦИИ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
+# --- УТИЛИТЫ ОБФУСКАЦИИ (Без изменений) ---
 
 KEY_LENGTH = 32
 TIME_LIMIT = 0.05 
@@ -100,7 +99,7 @@ def escape_markdown_v2(text: str) -> str:
     text = text.replace('\\', '\\\\')
     return text
 
-# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ В ЛОГИКЕ) ---
+# --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (Без изменений) ---
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -123,17 +122,15 @@ end
 def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
     """Генерирует финальный загрузчик с полной стрингификацией логики."""
     
-    # --- I. Генерация параметров и логики XOR ---
     if mode == 'roblox_exec':
         xor_logic = "local XorFunc = bit.bxor or bit32.bxor"
     elif mode == 'roblox_studio':
         xor_logic = "local XorFunc = bit32.bxor"
     elif mode == 'safe_native':
         xor_logic = "local function XorFunc(a, b) local c=0; local p=1; while a>0 or b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a=(a-ra)/2; b=(b-rb)/2; p=p*2 end return c end"
-    else: # Generic
+    else: 
         xor_logic = "local XorFunc = (bit and bit.bxor) or (bit32 and bit32.bxor) or function(a,b) local p,c=1,0 while a>0 and b>0 do local ra,rb=a%2,b%2 if ra~=rb then c=c+p end a,b,p=(a-ra)/2,(b-rb)/2,p*2 end if a<b then a=b end while a>0 do local ra=a%2 if ra>0 then c=c+p end a,p=(a-ra)/2,p*2 end return c end"
 
-    # 2. Разбиение ключа (на 6 частей)
     split_points = sorted(random.sample(range(1, KEY_LENGTH), 5))
     key_parts = [final_key[0:split_points[0]], final_key[split_points[0]:split_points[1]],
                  final_key[split_points[1]:split_points[2]], final_key[split_points[2]:split_points[3]],
@@ -142,12 +139,10 @@ def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
     mini_keys = [generate_key(8) for _ in range(6)]
     encoded_parts = [xor_obfuscate(part.encode('utf-8'), mini_keys[i]) for i, part in enumerate(key_parts)]
     
-    # 3. Гипер-Запутанная Сборка Ключа
     indices = [1, 2, 3, 4, 5, 6]; random.shuffle(indices)
     key_assembly_parts = [f"P{i}" for i in indices]
     key_assembly_concat = " .. ".join(key_assembly_parts)
     
-    # 4. Переменные для запутывания
     nums = [random.randint(100, 999) for _ in range(3)]
     vars = [generate_key(4) for _ in range(9)]
     
@@ -157,8 +152,6 @@ def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
     local {vars[8]} = string.byte("{generate_key(1)}", 1) + 1
     if ({vars[7]} > 0) then {vars[8]} = {vars[8]} - 1 end
     """
-    
-    # --- II. Генерация Полной Логики Загрузчика (В виде Lua-кода) ---
     
     FULL_LOADER_LOGIC = f"""
         local encoded_main = "{encoded_data}"
@@ -235,17 +228,13 @@ def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
         end
     """
     
-    # 4. Финальный шаг: Шифруем ВЕСЬ загрузчик Base64 и XOR-ом!
     META_KEY = generate_key(8)
     encoded_meta = xor_obfuscate(FULL_LOADER_LOGIC.encode('utf-8'), META_KEY)
 
-    # --- III. Самая верхняя, нечитаемая часть скрипта (MEGA-CHAOS) ---
-    
     FINAl_SCRIPT = f"""--[[ Meloten MEGA-CHAOS-OBF ({mode}) - Ultimate Self-Modifying Loader ]]
 local D = "{encoded_meta}"
 local K = "{META_KEY}"
 
--- Встроенная логика Base64 и XOR (максимально нечитаемая форма)
 local function GetLogic(s, i)
     return string.byte(s, i)
 end
@@ -253,7 +242,6 @@ end
 local function ChaosDecrypt(data, key)
     local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
     
-    -- Нечитаемый Base64-декодер
     local function B64_D(d)
         d = string.gsub(d, '[^'..b..'=]', '')
         local f = function(x)
@@ -277,10 +265,8 @@ local function ChaosDecrypt(data, key)
     for i = 1, #decoded do
         local byte_value = GetLogic(decoded, i)
         local key_value = GetLogic(key, (i - 1) % k_len + 1)
-        -- Используем прямой XOR, если доступен (для Roblox/JIT)
         local xor_result = byte_value ~ key_value 
         if not xor_result then
-            -- Резервный XOR
             local function native_xor(a, b)
                 local p, c = 1, 0
                 while a > 0 or b > 0 do
@@ -314,28 +300,26 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang_code = query.data.split('_')[1]
     chat_id = update.effective_chat.id
     
-    # Сохраняем язык в application.user_data (общее хранилище)
     if chat_id not in application.user_data:
         application.user_data[chat_id] = {}
     application.user_data[chat_id]['lang'] = lang_code
     
-    # --- УСТОЙЧИВОЕ К СБОЯМ РЕДАКТИРОВАНИЕ СООБЩЕНИЯ ---
+    # 1. Отправляем сообщение об успешной установке языка
     text = get_text(chat_id, 'language_set')
     try:
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
-        # Если не удалось отредактировать (например, сообщение слишком старое), отправляем новое
         logger.warning(f"Failed to edit language message: {e}")
         await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2)
 
-    # После выбора языка предлагаем отправить файл
+    # 2. ГАРАНТИРОВАННО ОТПРАВЛЯЕМ ПОДРОБНУЮ ИНСТРУКЦИЮ (start_text)
     start_text = get_text(chat_id, 'start')
     await context.bot.send_message(chat_id, start_text, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    # Проверяем, был ли уже выбран язык
+    # Если язык уже выбран, отправляем инструкцию
     if application.user_data.get(chat_id, {}).get('lang'):
         start_text = get_text(chat_id, 'start')
         await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN_V2)
@@ -349,7 +333,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        TEXTS['ru']['select_lang'], # Используем русский по умолчанию для выбора
+        TEXTS['ru']['select_lang'], 
         reply_markup=reply_markup
     )
 
@@ -357,7 +341,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    # Проверяем, выбран ли язык
     if not application.user_data.get(chat_id, {}).get('lang'):
         await update.message.reply_text("Пожалуйста, выберите язык с помощью команды /start.", parse_mode=ParseMode.MARKDOWN_V2)
         return
@@ -370,7 +353,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
-    # Используем context.user_data для временного хранения файла
     context.user_data['file_id'] = doc.file_id
     context.user_data['file_name'] = doc.file_name
 
@@ -394,13 +376,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = update.effective_chat.id
-
-    # Обрабатываем только кнопки обфускации
     
     await query.answer() 
         
     mode = query.data
-    # Получаем file_id и file_name из контекста (он должен быть там после handle_document)
     file_id = context.user_data.get('file_id')
     file_name = context.user_data.get('file_name')
     
@@ -413,7 +392,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         escaped_file_name = escape_markdown_v2(file_name)
         text = get_text(chat_id, 'encrypting').format(escaped_file_name, mode)
         
-        # Редактируем сообщение, чтобы показать прогресс
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
         f = await context.bot.get_file(file_id)
@@ -444,7 +422,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN_V2
         )
         
-        # Очищаем временные данные
         context.user_data.pop('file_id', None)
         context.user_data.pop('file_name', None)
 
@@ -454,23 +431,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         error_message = escape_markdown_v2(str(e))
         error_text = get_text(chat_id, 'error').format(error_message)
         
-        # Резервный механизм: если редактирование не удалось, отправляем новое сообщение
         try:
             await query.edit_message_text(error_text, parse_mode=ParseMode.MARKDOWN_V2)
         except:
              await context.bot.send_message(chat_id, error_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-# --- ИНИЦИАЛИЗАЦИЯ ---
+# --- ИНИЦИАЛИЗАЦИЯ (Без изменений) ---
 
 def init_app():
     application.add_handler(CommandHandler('start', start_command))
-    # Обработчик выбора языка
     application.add_handler(CallbackQueryHandler(set_language, pattern='^setlang_')) 
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    # Обработчик кнопок обфускации
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # Инициализируем user_data
     if not hasattr(application, 'user_data'):
         application.user_data = {}
     
@@ -495,7 +468,7 @@ def set_webhook():
         except Exception as e:
             logger.error(f"Webhook fail: {e}")
 
-# --- РОУТЫ ---
+# --- РОУТЫ (Без изменений) ---
 
 @app.route('/', methods=['GET'])
 def index():
