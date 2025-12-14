@@ -8,8 +8,9 @@ from io import BytesIO
 import asyncio
 import time
 from flask import Flask, request
+import re 
 
-# --- ИСПРАВЛЕННЫЕ ИМПОРТЫ ---
+# --- ИМПОРТЫ ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
 from telegram.ext import (
     Application, 
@@ -18,12 +19,11 @@ from telegram.ext import (
     ContextTypes, 
     filters,
     ApplicationBuilder,
-    CallbackQueryHandler # Вернули для кнопок обфускации
+    CallbackQueryHandler
 )
 from telegram.constants import ParseMode 
-import re # Добавляем для работы с Regex
 
-# --- КОНФИГУРАЦИЯ (Без изменений) ---
+# --- КОНФИГУРАЦИЯ ---
 
 FALLBACK_TOKEN = '7738098322:AAEPMhu7wD-l1_Qr-4Ljlm1dr6oPinnH_oU' 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', FALLBACK_TOKEN)
@@ -102,7 +102,6 @@ def escape_markdown_v2(text: str) -> str:
     return text
 
 # --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (Без изменений) ---
-# ... (Оставлены без изменений для краткости, они работают) ...
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -296,10 +295,11 @@ run(code)()
 
 async def set_language_by_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    # Используем update.message.text, так как MessageHandler с filters.TEXT его гарантирует
     text = update.message.text.lower()
     
-    # Дополнительная проверка: если язык уже установлен, игнорируем этот Message
-    if context.application.user_data.get(chat_id, {}).get('lang'):
+    # Дополнительная проверка, чтобы не перехватывать другие сообщения
+    if not (context.application.user_data.get(chat_id, {}).get('lang') is None):
         return
         
     # Определяем код языка
@@ -308,7 +308,6 @@ async def set_language_by_text(update: Update, context: ContextTypes.DEFAULT_TYP
     elif 'русский' in text:
         lang_code = 'ru'
     else:
-        # Если пришел невалидный текст, который не является English/Русский
         return
         
     # --- Записываем язык в глобальное хранилище ---
@@ -349,7 +348,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Проверяем, выбран ли язык 
     if not context.application.user_data.get(chat_id, {}).get('lang'):
-        await update.message.reply_text("Пожалуйста, выберите язык с помощью команды /start.", parse_mode=ParseMode.MARKDOWN_V2)
+        # Если язык не выбран, просим его выбрать
+        text = TEXTS['ru']['select_lang'] 
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
         
     doc = update.message.document
@@ -451,11 +452,12 @@ def init_app():
     application.add_handler(CommandHandler('start', start_command))
     
     # 2. ИСПРАВЛЕННЫЙ Обработчик текстового ввода для выбора языка
-    # УДАЛЕН 'flags=0', используем re.IGNORECASE для поддержки заглавных букв
-    language_filter = filters.Regex(re.compile(r'^(English|Русский)$', re.IGNORECASE))
+    # Должен идти первым среди MessageHandler, чтобы перехватить ввод 'English'/'Русский'
+    language_regex = re.compile(r'^(English|Русский)$', re.IGNORECASE)
+    language_filter = filters.TEXT & filters.Regex(language_regex)
     application.add_handler(MessageHandler(language_filter, set_language_by_text))
     
-    # 3. Обработчик документов
+    # 3. Обработчик документов (должен идти после текстового)
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
     # 4. Обработчик кнопок обфускации (CallbackQueryHandler)
