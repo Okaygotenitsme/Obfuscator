@@ -17,9 +17,11 @@ from telegram.ext import (
     CommandHandler, 
     ContextTypes, 
     filters,
-    ApplicationBuilder
+    ApplicationBuilder,
+    CallbackQueryHandler # Вернули для кнопок обфускации
 )
 from telegram.constants import ParseMode 
+import re # Добавляем для работы с Regex
 
 # --- КОНФИГУРАЦИЯ (Без изменений) ---
 
@@ -68,7 +70,6 @@ TEXTS = {
     }
 }
 
-# --- ИСПРАВЛЕНО: Теперь принимает context для доступа к user_data ---
 def get_text(chat_id, key, context: ContextTypes.DEFAULT_TYPE):
     """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
     lang = context.application.user_data.get(chat_id, {}).get('lang', 'ru')
@@ -297,13 +298,17 @@ async def set_language_by_text(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_id = update.effective_chat.id
     text = update.message.text.lower()
     
+    # Дополнительная проверка: если язык уже установлен, игнорируем этот Message
+    if context.application.user_data.get(chat_id, {}).get('lang'):
+        return
+        
     # Определяем код языка
     if 'english' in text:
         lang_code = 'en'
     elif 'русский' in text:
         lang_code = 'ru'
     else:
-        # Если пришел невалидный текст, игнорируем его
+        # Если пришел невалидный текст, который не является English/Русский
         return
         
     # --- Записываем язык в глобальное хранилище ---
@@ -331,7 +336,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     # Если язык не выбран, просим ввести его текстом
-    text_prompt = TEXTS['ru']['select_lang'] # Используем русский как язык по умолчанию
+    text_prompt = TEXTS['ru']['select_lang'] 
     
     await update.message.reply_text(
         text_prompt,
@@ -342,7 +347,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    # Проверяем, выбран ли язык (теперь на основе данных, а не ReplyMarkup)
+    # Проверяем, выбран ли язык 
     if not context.application.user_data.get(chat_id, {}).get('lang'):
         await update.message.reply_text("Пожалуйста, выберите язык с помощью команды /start.", parse_mode=ParseMode.MARKDOWN_V2)
         return
@@ -377,7 +382,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Этот хендлер остался для кнопок выбора платформы (CallbackQueryHandler)
     query = update.callback_query
     chat_id = update.effective_chat.id
     
@@ -396,7 +400,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         escaped_file_name = escape_markdown_v2(file_name)
         text = get_text(chat_id, 'encrypting', context).format(escaped_file_name, mode)
         
-        # Редактирование сообщения с кнопками платформы
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
         f = await context.bot.get_file(file_id)
@@ -447,15 +450,15 @@ def init_app():
     # 1. Обработчик команды /start
     application.add_handler(CommandHandler('start', start_command))
     
-    # 2. НОВЫЙ Обработчик текстового ввода для выбора языка
-    language_filter = filters.Regex(r'^(English|Русский)$', flags=0)
+    # 2. ИСПРАВЛЕННЫЙ Обработчик текстового ввода для выбора языка
+    # УДАЛЕН 'flags=0', используем re.IGNORECASE для поддержки заглавных букв
+    language_filter = filters.Regex(re.compile(r'^(English|Русский)$', re.IGNORECASE))
     application.add_handler(MessageHandler(language_filter, set_language_by_text))
     
     # 3. Обработчик документов
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
     # 4. Обработчик кнопок обфускации (CallbackQueryHandler)
-    # ПРИМЕЧАНИЕ: Этот хендлер ловит все оставшиеся колбэки, которые не поймал set_language_by_text
     application.add_handler(CallbackQueryHandler(button_callback))
     
     loop.run_until_complete(application.initialize())
