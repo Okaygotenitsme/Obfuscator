@@ -43,7 +43,7 @@ application = (
     .build()
 )
 
-# --- ЛОКАЛИЗАЦИЯ (с экранированием) ---
+# --- ЛОКАЛИЗАЦИЯ (Без изменений) ---
 TEXTS = {
     'en': {
         'start': "👋 **Meloten Obfuscator**\n\n**INSTRUCTIONS:**\n1\\. Send me your \\.lua or \\.txt file\\.\n2\\. I will ask you to select the target platform\\.\n3\\. Done\\! I will send you the obfuscated file and the key\\.",
@@ -69,9 +69,11 @@ TEXTS = {
     }
 }
 
-def get_text(chat_id, key):
+# --- ИСПРАВЛЕНО: Теперь принимает context для доступа к user_data ---
+def get_text(chat_id, key, context: ContextTypes.DEFAULT_TYPE):
     """Получает текст на выбранном языке пользователя, используя глобальное хранилище."""
-    lang = application.user_data.get(chat_id, {}).get('lang', 'ru')
+    # Используем context.application.user_data для доступа к глобальным данным
+    lang = context.application.user_data.get(chat_id, {}).get('lang', 'ru')
     return TEXTS.get(lang, TEXTS['ru']).get(key, TEXTS['ru'][key])
 
 # --- УТИЛИТЫ ОБФУСКАЦИИ (Без изменений) ---
@@ -101,7 +103,6 @@ def escape_markdown_v2(text: str) -> str:
     return text
 
 # --- ШАБЛОНЫ ЗАГРУЗЧИКОВ (Без изменений) ---
-# ... (Оставлены без изменений для краткости, они работают) ...
 
 LUA_BASE64_IMPL = """
 local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -120,6 +121,7 @@ local function B64(data)
     end))
 end
 """
+# ... (Остальной код get_loader без изменений) ...
 
 def get_loader(mode: str, encoded_data: str, final_key: str) -> str:
     if mode == 'roblox_exec':
@@ -295,19 +297,22 @@ run(code)()
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer() # Сначала подтверждаем нажатие!
+    await query.answer() 
     
     lang_code = query.data.split('_')[1]
     chat_id = update.effective_chat.id
     
-    # Сохраняем язык
-    if chat_id not in application.user_data:
-        application.user_data[chat_id] = {}
-    application.user_data[chat_id]['lang'] = lang_code
+    # --- ИСПРАВЛЕНО: Записываем в context.application.user_data ---
+    # Инициализируем словарь, если его нет
+    if chat_id not in context.application.user_data:
+        context.application.user_data[chat_id] = {}
+    
+    # Записываем язык
+    context.application.user_data[chat_id]['lang'] = lang_code
     
     # 1. Формируем текст об успешной установке (с экранированием)
-    raw_text = get_text(chat_id, 'language_set')
-    escaped_text = escape_markdown_v2(raw_text) # Экранируем специальные символы
+    raw_text = get_text(chat_id, 'language_set', context)
+    escaped_text = escape_markdown_v2(raw_text) 
     
     # 2. Пытаемся отредактировать сообщение с выбором языка
     try:
@@ -318,15 +323,16 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, escaped_text, parse_mode=ParseMode.MARKDOWN_V2)
 
     # 3. Отправляем подробную инструкцию
-    start_text = get_text(chat_id, 'start')
+    start_text = get_text(chat_id, 'start', context)
     await context.bot.send_message(chat_id, start_text, parse_mode=ParseMode.MARKDOWN_V2)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    if application.user_data.get(chat_id, {}).get('lang'):
-        start_text = get_text(chat_id, 'start')
+    # --- ИСПРАВЛЕНО: Используем context.application.user_data для проверки ---
+    if context.application.user_data.get(chat_id, {}).get('lang'):
+        start_text = get_text(chat_id, 'start', context)
         await update.message.reply_text(start_text, parse_mode=ParseMode.MARKDOWN_V2)
         return
         
@@ -345,7 +351,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
-    if not application.user_data.get(chat_id, {}).get('lang'):
+    # --- ИСПРАВЛЕНО: Используем context.application.user_data для проверки ---
+    if not context.application.user_data.get(chat_id, {}).get('lang'):
         await update.message.reply_text("Пожалуйста, выберите язык с помощью команды /start.", parse_mode=ParseMode.MARKDOWN_V2)
         return
         
@@ -353,7 +360,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = doc.file_name.lower()
     
     if not doc or not (filename.endswith('.lua') or filename.endswith('.txt')):
-        text = get_text(chat_id, 'invalid_file')
+        text = get_text(chat_id, 'invalid_file', context)
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
@@ -369,7 +376,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     escaped_file_name = escape_markdown_v2(doc.file_name)
-    text = get_text(chat_id, 'file_accepted').format(escaped_file_name)
+    text = get_text(chat_id, 'file_accepted', context).format(escaped_file_name)
 
     await update.message.reply_text(
         text,
@@ -388,13 +395,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_name = context.user_data.get('file_name')
     
     if not file_id:
-        text = get_text(chat_id, 'file_expired')
+        text = get_text(chat_id, 'file_expired', context)
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:
         escaped_file_name = escape_markdown_v2(file_name)
-        text = get_text(chat_id, 'encrypting').format(escaped_file_name, mode)
+        text = get_text(chat_id, 'encrypting', context).format(escaped_file_name, mode)
         
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -417,7 +424,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         escaped_key = escape_markdown_v2(final_key)
         
-        caption = get_text(chat_id, 'done').format(escaped_key, mode)
+        caption = get_text(chat_id, 'done', context).format(escaped_key, mode)
         
         await context.bot.send_document(
             chat_id=query.message.chat_id,
@@ -433,7 +440,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error processing callback: {e}")
         error_message = escape_markdown_v2(str(e))
-        error_text = get_text(chat_id, 'error').format(error_message)
+        error_text = get_text(chat_id, 'error', context).format(error_message)
         
         try:
             await query.edit_message_text(error_text, parse_mode=ParseMode.MARKDOWN_V2)
@@ -448,8 +455,9 @@ def init_app():
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    if not hasattr(application, 'user_data'):
-        application.user_data = {}
+    # --- УДАЛЕНО: Инициализация application.user_data, теперь оно управляется PTB ---
+    # if not hasattr(application, 'user_data'):
+    #     application.user_data = {}
     
     loop.run_until_complete(application.initialize())
     try:
